@@ -15,6 +15,8 @@ var arena: ArenaGenerator
 var all_characters: Array[CharacterController] = []
 
 var _current_target: CharacterController = null
+var _last_known_target_pos: Vector3 = Vector3.ZERO
+var _has_last_known_pos: bool = false
 var _reselect_timer: float = 0.0
 var _strafe_sign: float = 1.0
 var _strafe_timer: float = 0.0
@@ -86,17 +88,20 @@ func _select_best_target() -> CharacterController:
 		if dist <= controlled_character.max_attack_range:
 			score += 12.0
 
-		# Check if line of sight is unobstructed by obstacles
+		# Check if line of sight is unobstructed by obstacles (AI cannot see through walls)
 		var dir_to := Vector3(to_other.x, 0.0, to_other.z).normalized()
 		var seg := AimLine.compute_unobstructed_segment(
 			Vector3(my_pos.x, my_pos.y + 0.9, my_pos.z),
 			dir_to,
-			minf(dist, controlled_character.max_attack_range),
+			dist,
 			controlled_character.get_world_3d(),
 			obs_aabbs
 		)
-		if not seg["blocked"]:
-			score += 15.0
+		if seg["blocked"] and float(seg["distance"]) < dist - 0.35:
+			# Blocked by solid obstacle — AI cannot see through obstacles
+			continue
+
+		score += 15.0
 
 		if other == _current_target:
 			score += 3.5
@@ -105,16 +110,42 @@ func _select_best_target() -> CharacterController:
 			best_score = score
 			best_target = other
 
+	if best_target != null:
+		_last_known_target_pos = best_target.global_position
+		_has_last_known_pos = true
+
 	return best_target
 
 
 func _update_aiming(delta: float) -> void:
-	if not _is_valid_target(_current_target):
-		return
-
 	var my_pos := controlled_character.global_position
-	var target_pos := _current_target.global_position + _current_target.velocity * 0.14
-	var to_target := Vector3(target_pos.x - my_pos.x, 0.0, target_pos.z - my_pos.z)
+	var aim_point := Vector3.ZERO
+
+	if _is_valid_target(_current_target):
+		# Verify unobstructed line-of-sight before updating real-time target position
+		var obs_aabbs := arena.get_active_obstacle_aabbs() if arena else []
+		var to_curr := _current_target.global_position - my_pos
+		var dist := Vector2(to_curr.x, to_curr.z).length()
+		var dir_to := Vector3(to_curr.x, 0.0, to_curr.z).normalized() if dist > 0.01 else Vector3.BACK
+		var seg := AimLine.compute_unobstructed_segment(
+			Vector3(my_pos.x, my_pos.y + 0.9, my_pos.z),
+			dir_to,
+			dist,
+			controlled_character.get_world_3d(),
+			obs_aabbs
+		)
+		if not (seg["blocked"] and float(seg["distance"]) < dist - 0.35):
+			# Do not predict future inputs; only aim at current visible position
+			_last_known_target_pos = _current_target.global_position
+			_has_last_known_pos = true
+		aim_point = _last_known_target_pos
+	elif _has_last_known_pos:
+		aim_point = _last_known_target_pos
+	else:
+		# Sweep toward arena center / open space when no target is visible
+		aim_point = Vector3(sin(Time.get_ticks_msec() * 0.0012) * 3.0, 0.0, cos(Time.get_ticks_msec() * 0.0012) * 3.0)
+
+	var to_target := Vector3(aim_point.x - my_pos.x, 0.0, aim_point.z - my_pos.z)
 	if to_target.length_squared() < 0.001:
 		return
 
@@ -144,9 +175,9 @@ func _update_movement(_delta: float) -> void:
 	var steer := Vector2.ZERO
 	var obs_aabbs := arena.get_active_obstacle_aabbs() if arena else []
 
-	# 2. Evade incoming opponent aiming lines
+	# 2. Evade incoming opponent aiming lines only when they are visible (not stealth-hidden)
 	for other in all_characters:
-		if not _is_valid_target(other):
+		if not _is_valid_target(other) or other.is_stealth_hidden or other.is_invincible:
 			continue
 		var other_origin := Vector2(other.global_position.x, other.global_position.z)
 		var other_dir := Vector2(other.aim_direction.x, other.aim_direction.z).normalized()

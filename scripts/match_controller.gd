@@ -66,10 +66,16 @@ var arena: ArenaGenerator
 var camera_rig: CameraRig
 var hud: HUDController
 var audio_manager: AudioManager
+var multiplayer_client: MultiplayerClient
+var dedicated_server: DedicatedServer
 
 var characters: Array[CharacterController] = []
 var ai_controllers: Array[AIController] = []
 var human_character: CharacterController = null
+
+var is_online_match: bool = false
+var _online_active_slots: Array[bool] = [true, true, true, true, true]
+var _ai_root: Node
 
 var current_phase: MatchPhase = MatchPhase.PREPARATION
 var current_round: int = 1
@@ -83,6 +89,8 @@ var _last_tick_second: int = -1
 
 
 func _ready() -> void:
+	if _check_and_run_dedicated_server_cli():
+		return
 	_setup_environment_and_lighting()
 	_setup_subsystems()
 	if start_on_main_menu:
@@ -91,11 +99,40 @@ func _ready() -> void:
 		start_new_match()
 
 
+func _check_and_run_dedicated_server_cli() -> bool:
+	var all_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	var run_as_server := false
+	var port := NetProtocol.DEFAULT_PORT
+	var bind_ip := "0.0.0.0"
+
+	for arg in all_args:
+		if arg == "--server" or arg == "--dedicated-server":
+			run_as_server = true
+		elif arg.begins_with("--port="):
+			port = int(arg.trim_prefix("--port="))
+		elif arg.begins_with("--bind="):
+			bind_ip = arg.trim_prefix("--bind=")
+
+	if not run_as_server:
+		return false
+
+	dedicated_server = DedicatedServer.new()
+	dedicated_server.name = "DedicatedServer"
+	add_child(dedicated_server)
+	dedicated_server.start_server(port, bind_ip)
+	set_process(false)
+	return true
+
+
 func enter_main_menu() -> void:
+	is_online_match = false
+	_online_active_slots = [true, true, true, true, true]
 	current_phase = MatchPhase.MAIN_MENU
 	_is_spectating = false
 	_spectated_index = 0
 	_last_tick_second = -1
+	_set_local_ai_enabled(true)
+	human_character = characters[0] if not characters.is_empty() else null
 
 	if audio_manager:
 		audio_manager.set_music_ducked(false)
@@ -107,6 +144,11 @@ func enter_main_menu() -> void:
 
 	for i in range(characters.size()):
 		var c := characters[i]
+		var cfg := CHARACTER_CONFIGS[i % CHARACTER_CONFIGS.size()]
+		c.is_network_controlled = false
+		c.is_local_online_player = false
+		c.visible = true
+		c.configure_character(cfg["id"], cfg["name"], cfg["human"], cfg["primary"], cfg["accent"], max_attack_range)
 		var sp := spawn_points[i % spawn_points.size()]
 		var inward_dir := Vector3(-sp.x, 0.0, -sp.z).normalized()
 		c.max_attack_range = max_attack_range
@@ -138,6 +180,11 @@ func enter_main_menu() -> void:
 
 
 func start_new_match() -> void:
+	is_online_match = false
+	_online_active_slots = [true, true, true, true, true]
+	_set_local_ai_enabled(true)
+	human_character = characters[0] if not characters.is_empty() else null
+
 	current_round = 1
 	current_phase = MatchPhase.PREPARATION
 	phase_timer = preparation_duration
@@ -156,6 +203,11 @@ func start_new_match() -> void:
 
 	for i in range(characters.size()):
 		var c := characters[i]
+		var cfg := CHARACTER_CONFIGS[i % CHARACTER_CONFIGS.size()]
+		c.is_network_controlled = false
+		c.is_local_online_player = false
+		c.visible = true
+		c.configure_character(cfg["id"], cfg["name"], cfg["human"], cfg["primary"], cfg["accent"], max_attack_range)
 		if c.visuals:
 			c.visuals.is_lobby_showcase = false
 		var sp := spawn_points[i % spawn_points.size()]
@@ -197,6 +249,11 @@ func _process(delta: float) -> void:
 		var followed := camera_rig.target_node as CharacterController if camera_rig else null
 		if followed == null or not is_instance_valid(followed) or not followed.is_alive():
 			_refresh_spectator_target()
+
+	if is_online_match:
+		_update_online_client_timers(delta)
+		_update_hud_display()
+		return
 
 	_update_arena_shrinking(delta)
 	_update_round_cycle(delta)
@@ -368,14 +425,330 @@ func _update_arena_shrinking(delta: float) -> void:
 
 func get_living_players() -> Array[CharacterController]:
 	var alive: Array[CharacterController] = []
-	for c in characters:
-		if c.is_alive():
-			alive.append(c)
+	for i in range(characters.size()):
+		if is_online_match and i < _online_active_slots.size() and not _online_active_slots[i]:
+			continue
+		if characters[i].is_alive():
+			alive.append(characters[i])
 	return alive
 
 
+func _set_local_ai_enabled(enabled: bool) -> void:
+	for ai in ai_controllers:
+		if is_instance_valid(ai):
+			ai.set_physics_process(enabled)
+
+
+func _update_online_client_timers(delta: float) -> void:
+	phase_timer = maxf(0.0, phase_timer - delta)
+	if arena.current_stage < 4 and current_phase != MatchPhase.MATCH_OVER:
+		shrink_timer = maxf(0.0, shrink_timer - delta)
+
+	if current_phase == MatchPhase.PREPARATION:
+		var urgency := clampf(1.0 - (phase_timer / maxf(0.01, preparation_duration)), 0.0, 1.0)
+		for i in range(characters.size()):
+			if i < _online_active_slots.size() and not _online_active_slots[i]:
+				continue
+			if characters[i].is_alive():
+				characters[i].set_preparation_status(true, urgency)
+
+		var sec_ceil := int(ceil(maxf(0.0, phase_timer)))
+		if sec_ceil >= 1 and sec_ceil <= 3 and sec_ceil != _last_tick_second:
+			_last_tick_second = sec_ceil
+			if audio_manager:
+				audio_manager.play_countdown_tick(sec_ceil == 1)
+
+
+func _on_online_match_started(start_msg: Dictionary) -> void:
+	is_online_match = true
+	_set_local_ai_enabled(false)
+
+	current_round = int(start_msg.get("round", 1))
+	preparation_duration = float(start_msg.get("preparation_duration", preparation_duration))
+	resolution_freeze_duration = float(start_msg.get("resolution_freeze_duration", resolution_freeze_duration))
+	shrink_stage_interval = float(start_msg.get("shrink_stage_interval", shrink_stage_interval))
+	shrink_warning_duration = float(start_msg.get("shrink_warning_duration", shrink_warning_duration))
+
+	current_phase = MatchPhase.PREPARATION
+	phase_timer = preparation_duration
+	shrink_timer = shrink_stage_interval
+	_is_spectating = false
+	_spectated_index = 0
+	_last_tick_second = -1
+
+	if audio_manager:
+		audio_manager.set_music_ducked(false)
+		audio_manager.start_background_music()
+
+	arena.generate_arena()
+	var spawn_points := arena.get_spawn_positions()
+	var obs_aabbs := arena.get_active_obstacle_aabbs()
+
+	var slots: Array = start_msg.get("slots", [])
+	var local_peer := multiplayer_client.local_peer_id if multiplayer_client else 0
+	human_character = null
+	_online_active_slots.clear()
+
+	for i in range(characters.size()):
+		var c := characters[i]
+		var pal := CHARACTER_CONFIGS[i % CHARACTER_CONFIGS.size()]
+		var sp := spawn_points[i % spawn_points.size()]
+		var inward_dir := Vector3(-sp.x, 0.0, -sp.z).normalized()
+
+		if c.visuals:
+			c.visuals.is_lobby_showcase = false
+
+		var s_info: Dictionary = slots[i] if i < slots.size() else {"active": false}
+		var active := bool(s_info.get("active", false))
+		_online_active_slots.append(active)
+
+		if active:
+			var peer_id := int(s_info.get("peer_id", 0))
+			var p_name := str(s_info.get("name", pal["name"]))
+			var is_local := (peer_id > 0 and peer_id == local_peer)
+			c.visible = true
+			c.is_network_controlled = true
+			c.is_local_online_player = is_local
+			c.configure_character(i, p_name, is_local, pal["primary"], pal["accent"], max_attack_range)
+			c.set_obstacle_aabbs(obs_aabbs)
+			c.spawn_at(sp, inward_dir)
+			if is_local:
+				human_character = c
+		else:
+			c.is_network_controlled = true
+			c.is_local_online_player = false
+			c.spawn_at(Vector3(0.0, -50.0, 0.0), Vector3.BACK)
+			c.set_controls_frozen(true)
+			c.set_character_state(CharacterController.State.ELIMINATED)
+			if c._collision_shape:
+				c._collision_shape.disabled = true
+			c.visible = false
+
+	if human_character == null and not characters.is_empty():
+		human_character = characters[0]
+
+	if start_msg.has("initial_snapshot") and typeof(start_msg["initial_snapshot"]) == TYPE_DICTIONARY:
+		_apply_online_snapshot_dict(start_msg["initial_snapshot"], true)
+
+	_update_stealth_visibility()
+
+	if camera_rig and human_character:
+		camera_rig.set_lobby_mode(false, human_character, true)
+		camera_rig.set_follow_target(human_character, false, true)
+
+	if hud:
+		hud.show_in_game_hud()
+		hud.setup_player_badges(characters)
+		hud.update_player_badges(characters, get_living_players().size())
+		hud.show_toast("ONLINE MATCH STARTED — ROUND 1", 2.2)
+
+	if human_character and hud and hud.mobile_controls:
+		hud.mobile_controls.set_controls_active(true)
+		hud.mobile_controls.reset_inputs()
+		hud.mobile_controls.set_initial_aim(human_character.aim_direction)
+
+	round_started.emit(current_round)
+
+
+func _on_online_snapshot_received(snap_msg: Dictionary) -> void:
+	if not is_online_match:
+		return
+	_apply_online_snapshot_dict(snap_msg, false)
+
+
+func _apply_online_snapshot_dict(snap_msg: Dictionary, snap_positions: bool) -> void:
+	current_round = int(snap_msg.get("round", current_round))
+	phase_timer = float(snap_msg.get("phase_timer", phase_timer))
+	shrink_timer = float(snap_msg.get("shrink_timer", shrink_timer))
+
+	var players_arr: Array = snap_msg.get("players", [])
+	for p_data in players_arr:
+		if typeof(p_data) != TYPE_DICTIONARY:
+			continue
+		var slot_id := int(p_data.get("slot_id", -1))
+		if slot_id < 0 or slot_id >= characters.size():
+			continue
+		if slot_id < _online_active_slots.size() and not _online_active_slots[slot_id]:
+			continue
+
+		var c := characters[slot_id]
+		var net_pos: Vector3 = p_data.get("pos", c.global_position)
+		var net_vel: Vector3 = p_data.get("vel", Vector3.ZERO)
+		var net_aim: Vector3 = p_data.get("aim_dir", c.aim_direction)
+		var net_state: int = int(p_data.get("state", int(c.current_state)))
+
+		if net_state == int(CharacterController.State.ELIMINATED) and c.is_alive():
+			c.eliminate("SERVER")
+		elif c.is_alive():
+			c.controls_frozen = bool(p_data.get("frozen", c.controls_frozen))
+			c.apply_network_snapshot(net_pos, net_vel, net_aim, snap_positions)
+
+
+func _on_online_round_started(round_msg: Dictionary) -> void:
+	if not is_online_match or current_phase == MatchPhase.MATCH_OVER:
+		return
+	current_round = int(round_msg.get("round", current_round + 1))
+	current_phase = MatchPhase.PREPARATION
+	phase_timer = float(round_msg.get("preparation_duration", preparation_duration))
+	_last_tick_second = -1
+
+	if round_msg.has("snapshot") and typeof(round_msg["snapshot"]) == TYPE_DICTIONARY:
+		_apply_online_snapshot_dict(round_msg["snapshot"], false)
+
+	for i in range(characters.size()):
+		if i < _online_active_slots.size() and not _online_active_slots[i]:
+			continue
+		var c := characters[i]
+		if c.is_alive():
+			c.set_controls_frozen(false)
+			c.set_firing_burst(false)
+			c.set_preparation_status(true, 0.0)
+
+	_update_stealth_visibility()
+	if human_character and human_character.is_alive() and hud and hud.mobile_controls:
+		c_reapply_current_input()
+	round_started.emit(current_round)
+
+
+func _on_online_laser_resolution(res_msg: Dictionary) -> void:
+	if not is_online_match:
+		return
+	current_phase = MatchPhase.RESOLUTION_FREEZE
+	phase_timer = resolution_freeze_duration
+	_last_tick_second = -1
+
+	if audio_manager:
+		audio_manager.play_laser_shoot()
+
+	if res_msg.has("snapshot") and typeof(res_msg["snapshot"]) == TYPE_DICTIONARY:
+		_apply_online_snapshot_dict(res_msg["snapshot"], true)
+
+	_update_stealth_visibility()
+
+	for c in get_living_players():
+		c.set_preparation_status(false, 1.0)
+		c.set_controls_frozen(true)
+		c.set_firing_burst(true)
+
+	if camera_rig:
+		camera_rig.trigger_screen_shake(0.26)
+
+	var elim_slots: Array = res_msg.get("eliminated_slots", [])
+	_is_resolving_simultaneous_batch = true
+	var newly_eliminated: Array[CharacterController] = []
+	for s_id in elim_slots:
+		var idx := int(s_id)
+		if idx >= 0 and idx < characters.size():
+			var victim := characters[idx]
+			if victim.is_alive():
+				victim.eliminate("LASER")
+			newly_eliminated.append(victim)
+	_is_resolving_simultaneous_batch = false
+
+	if not newly_eliminated.is_empty():
+		if audio_manager:
+			audio_manager.play_elimination_sfx()
+		var names := PackedStringArray()
+		for v in newly_eliminated:
+			names.append(v.display_name)
+		if hud:
+			hud.show_toast("%s ELIMINATED!" % ", ".join(names), 2.3)
+	else:
+		if hud:
+			hud.show_toast("ALL SHOTS MISSED OR BLOCKED!", 1.4)
+
+	simultaneous_resolution_completed.emit(newly_eliminated)
+	_update_online_spectator_and_badges()
+
+
+func _on_online_player_eliminated(elim_msg: Dictionary) -> void:
+	if not is_online_match:
+		return
+	var slot_id := int(elim_msg.get("slot_id", -1))
+	var reason := str(elim_msg.get("reason", "FALL"))
+	if slot_id >= 0 and slot_id < characters.size():
+		var c := characters[slot_id]
+		if c.is_alive():
+			c.eliminate(reason)
+		if reason == "FALL":
+			if audio_manager:
+				audio_manager.play_platform_drop()
+			if hud:
+				hud.show_toast("%s FELL OFF THE ARENA!" % c.display_name, 2.2)
+			if camera_rig:
+				camera_rig.trigger_screen_shake(0.22)
+	_update_online_spectator_and_badges()
+
+
+func _on_online_arena_shrink_event(shrink_msg: Dictionary) -> void:
+	if not is_online_match:
+		return
+	var ev := str(shrink_msg.get("event", ""))
+	shrink_timer = float(shrink_msg.get("shrink_timer", shrink_timer))
+	if ev == "warning_started":
+		var target_stage := int(shrink_msg.get("target_stage", arena.current_stage + 1))
+		var dur := float(shrink_msg.get("duration", shrink_warning_duration))
+		arena.start_shrink_warning(target_stage, dur)
+		var pct := int(round(arena.get_stage_width_ratio(target_stage) * 100.0))
+		if hud:
+			hud.show_toast("WARNING! PLATFORM SHRINKING TO %d%%!" % pct, 2.5)
+	elif ev == "stage_shrunk":
+		var new_stage := int(shrink_msg.get("new_stage", arena.current_stage + 1))
+		arena.execute_shrink_to_stage(new_stage)
+		if camera_rig:
+			camera_rig.trigger_screen_shake(0.32)
+
+
+func _on_online_player_disconnected(disc_msg: Dictionary) -> void:
+	if not is_online_match:
+		return
+	var slot_id := int(disc_msg.get("slot_id", -1))
+	var p_name := str(disc_msg.get("name", "PLAYER"))
+	if slot_id >= 0 and slot_id < characters.size():
+		var c := characters[slot_id]
+		if c.is_alive():
+			c.eliminate("DISCONNECTED")
+	if hud:
+		hud.show_toast("%s DISCONNECTED" % p_name, 2.0)
+	_update_online_spectator_and_badges()
+
+
+func _on_online_match_ended(end_msg: Dictionary) -> void:
+	if not is_online_match:
+		return
+	if end_msg.has("snapshot") and typeof(end_msg["snapshot"]) == TYPE_DICTIONARY:
+		_apply_online_snapshot_dict(end_msg["snapshot"], true)
+
+	var is_draw := bool(end_msg.get("is_draw", false))
+	var winner_slot := int(end_msg.get("winner_slot_id", -1))
+	var winner_char: CharacterController = null
+	if not is_draw and winner_slot >= 0 and winner_slot < characters.size():
+		winner_char = characters[winner_slot]
+	_finish_match(is_draw, winner_char)
+
+
+func _on_online_disconnected(reason: String) -> void:
+	if is_online_match and current_phase != MatchPhase.MATCH_OVER and current_phase != MatchPhase.MAIN_MENU:
+		enter_main_menu()
+		if hud:
+			hud.show_toast("CONNECTION LOST: %s" % reason.to_upper(), 3.2)
+
+
+func _update_online_spectator_and_badges() -> void:
+	var living := get_living_players()
+	if human_character and not human_character.is_alive() and living.size() > 0:
+		if human_character.current_state != CharacterController.State.SPECTATING:
+			human_character.enter_spectating_state()
+		if not _is_spectating:
+			_is_spectating = true
+			_spectated_index = 0
+		_refresh_spectator_target()
+	if hud:
+		hud.update_player_badges(characters, living.size())
+
+
 func _on_character_eliminated(character: CharacterController, reason: String) -> void:
-	if current_phase == MatchPhase.MATCH_OVER:
+	if current_phase == MatchPhase.MATCH_OVER or is_online_match:
 		return
 
 	if reason == "FALL":
@@ -494,6 +867,19 @@ func _setup_subsystems() -> void:
 	audio_manager.name = "AudioManager"
 	add_child(audio_manager)
 
+	multiplayer_client = MultiplayerClient.new()
+	multiplayer_client.name = "MultiplayerClient"
+	add_child(multiplayer_client)
+	multiplayer_client.authoritative_match_started.connect(_on_online_match_started)
+	multiplayer_client.authoritative_snapshot_received.connect(_on_online_snapshot_received)
+	multiplayer_client.authoritative_round_started.connect(_on_online_round_started)
+	multiplayer_client.authoritative_laser_resolution.connect(_on_online_laser_resolution)
+	multiplayer_client.authoritative_player_eliminated.connect(_on_online_player_eliminated)
+	multiplayer_client.authoritative_arena_shrink_event.connect(_on_online_arena_shrink_event)
+	multiplayer_client.authoritative_player_disconnected.connect(_on_online_player_disconnected)
+	multiplayer_client.authoritative_match_ended.connect(_on_online_match_ended)
+	multiplayer_client.disconnected_from_game_server.connect(_on_online_disconnected)
+
 	var arena_scene := load("res://scenes/arena.tscn") as PackedScene
 	arena = (arena_scene.instantiate() as ArenaGenerator) if arena_scene else ArenaGenerator.new()
 	arena.name = "ArenaGenerator"
@@ -580,15 +966,19 @@ func _setup_subsystems() -> void:
 	for i in range(ai_controllers.size()):
 		ai_controllers[i].setup_ai(characters[i + 1], arena, characters, i + 1)
 
-	# Wire mobile touch controls to the human character
-	if hud.mobile_controls and human_character:
+	# Wire mobile touch controls to the human character & online client
+	if hud.mobile_controls:
 		hud.mobile_controls.move_input_changed.connect(func(v: Vector2):
 			if human_character:
 				human_character.set_move_vector(v)
+			if is_online_match and multiplayer_client:
+				multiplayer_client.set_local_input(v, hud.mobile_controls.current_aim_vector)
 		)
 		hud.mobile_controls.aim_input_changed.connect(func(v: Vector2):
 			if human_character:
 				human_character.set_aim_vector(v)
+			if is_online_match and multiplayer_client:
+				multiplayer_client.set_local_input(hud.mobile_controls.current_move_vector, v)
 		)
 
 

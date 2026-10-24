@@ -33,6 +33,15 @@ var is_invincible: bool = true
 var controls_frozen: bool = false
 var is_stealth_hidden: bool = false
 
+# Online multiplayer client interpolation / reconciliation flags
+var is_network_controlled: bool = false
+var is_local_online_player: bool = false
+var _has_net_target: bool = false
+var _net_target_pos: Vector3 = Vector3.ZERO
+var _net_target_vel: Vector3 = Vector3.ZERO
+var _net_target_aim: Vector3 = Vector3(0.0, 0.0, 1.0)
+var _net_time_since_snap: float = 0.0
+
 var move_input: Vector2 = Vector2.ZERO
 var aim_direction: Vector3 = Vector3(0.0, 0.0, 1.0)
 var primary_color: Color = Color(0.0, 0.88, 1.0)
@@ -86,6 +95,11 @@ func spawn_at(spawn_pos: Vector3, initial_aim: Vector3) -> void:
 	controls_frozen = false
 	is_invincible = true
 	is_stealth_hidden = false
+	_has_net_target = true
+	_net_target_pos = spawn_pos
+	_net_target_vel = Vector3.ZERO
+	_net_target_aim = aim_direction
+	_net_time_since_snap = 0.0
 	if _collision_shape:
 		_collision_shape.disabled = false
 	if visuals:
@@ -174,6 +188,29 @@ func set_obstacle_aabbs(aabbs: Array[AABB]) -> void:
 	_active_obstacle_aabbs = aabbs
 
 
+func set_display_name(new_name: String) -> void:
+	display_name = new_name
+	if _name_label:
+		_name_label.text = display_name
+
+
+func apply_network_snapshot(net_pos: Vector3, net_vel: Vector3, net_aim: Vector3, snap_immediately: bool = false) -> void:
+	_has_net_target = true
+	_net_target_pos = net_pos
+	_net_target_vel = net_vel
+	_net_time_since_snap = 0.0
+	if net_aim.length_squared() > 0.0004:
+		_net_target_aim = Vector3(net_aim.x, 0.0, net_aim.z).normalized()
+
+	if snap_immediately or global_position.distance_to(net_pos) > 3.5:
+		global_position = net_pos
+		velocity = net_vel
+		if not is_local_online_player or controls_frozen:
+			aim_direction = _net_target_aim
+		if aim_line and current_state == State.ALIVE:
+			aim_line.update_line(global_position, aim_direction, get_world_3d(), _countdown_urgency)
+
+
 func eliminate(reason: String = "LASER") -> void:
 	if current_state != State.ALIVE:
 		return
@@ -259,7 +296,25 @@ func _physics_process(delta: float) -> void:
 			visuals.update_animation(delta, Vector3.ZERO, aim_direction, true)
 		return
 
-	# Active ALIVE physics
+	if is_network_controlled and not is_local_online_player:
+		# Remote online player: smoothly interpolate position & aim from authoritative server snapshots
+		_net_time_since_snap += delta
+		if _has_net_target:
+			var extrap_t := minf(_net_time_since_snap, 0.06)
+			var predicted_pos := _net_target_pos + (_net_target_vel * extrap_t if not controls_frozen else Vector3.ZERO)
+			global_position = global_position.lerp(predicted_pos, minf(1.0, delta * 18.0))
+			velocity = _net_target_vel
+			var cur_yaw := atan2(aim_direction.x, aim_direction.z)
+			var tgt_yaw := atan2(_net_target_aim.x, _net_target_aim.z)
+			var interp_yaw := lerp_angle(cur_yaw, tgt_yaw, minf(1.0, delta * 20.0))
+			aim_direction = Vector3(sin(interp_yaw), 0.0, cos(interp_yaw)).normalized()
+		if visuals:
+			visuals.update_animation(delta, velocity, aim_direction, false)
+		if aim_line:
+			aim_line.update_line(global_position, aim_direction, get_world_3d(), _countdown_urgency)
+		return
+
+	# Active ALIVE physics (Local single-player, Authoritative Server, or Local Online Player prediction)
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 	elif velocity.y < 0.0:
@@ -276,8 +331,17 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
-	# Check fall below platform elimination
-	if global_position.y < fall_elimination_y:
+	if is_network_controlled and is_local_online_player and _has_net_target:
+		# Smoothly reconcile local predicted position with authoritative server position
+		_net_time_since_snap += delta
+		var drift := global_position.distance_to(_net_target_pos)
+		if drift > 2.2:
+			global_position = _net_target_pos
+		elif drift > 0.06:
+			global_position = global_position.lerp(_net_target_pos, minf(1.0, delta * 11.0))
+
+	# Check fall below platform elimination (server or local mode only; clients never self-decide eliminations)
+	if not is_network_controlled and global_position.y < fall_elimination_y:
 		eliminate("FALL")
 		return
 
