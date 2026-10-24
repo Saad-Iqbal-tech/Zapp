@@ -9,11 +9,13 @@ signal exit_requested()
 signal matchmaking_cancelled()
 
 var play_button: Button
+var online_lobby_button: Button
 var settings_button: Button
 var how_to_play_button: Button
 var exit_button: Button
 var cancel_matchmaking_button: Button
 var close_how_to_button: Button
+var online_modal: OnlineLobbyModal
 
 var _lobby_container: Control
 var _how_to_modal: Control
@@ -41,6 +43,7 @@ func _ready() -> void:
 	_build_main_menu_ui()
 	_build_how_to_play_modal()
 	_build_matchmaking_modal()
+	_build_online_lobby_modal()
 
 
 func show_main_menu() -> void:
@@ -52,6 +55,8 @@ func show_main_menu() -> void:
 		_how_to_modal.visible = false
 	if _matchmaking_modal:
 		_matchmaking_modal.visible = false
+	if online_modal:
+		online_modal.visible = false
 
 
 func hide_all() -> void:
@@ -61,6 +66,8 @@ func hide_all() -> void:
 		_how_to_modal.visible = false
 	if _matchmaking_modal:
 		_matchmaking_modal.visible = false
+	if online_modal:
+		online_modal.visible = false
 
 
 func award_victory_bonus() -> void:
@@ -100,6 +107,14 @@ func is_matchmaking_active() -> bool:
 func set_how_to_play_open(open: bool) -> void:
 	if _how_to_modal:
 		_how_to_modal.visible = open
+
+
+func set_online_lobby_open(open: bool) -> void:
+	if online_modal:
+		if open:
+			online_modal.open_modal()
+		else:
+			online_modal.close_modal()
 
 
 func _process(delta: float) -> void:
@@ -352,14 +367,22 @@ func _build_main_menu_ui() -> void:
 	)
 	nav_hbox.add_child(exit_button)
 
-	# --- BOTTOM-RIGHT: Large Visually Dominant PLAY Button ---
+	# --- BOTTOM-RIGHT: Online Lobby + Large Visually Dominant PLAY Button ---
 	var play_vbox := VBoxContainer.new()
 	play_vbox.alignment = BoxContainer.ALIGNMENT_END
-	play_vbox.add_theme_constant_override("separation", 6)
+	play_vbox.add_theme_constant_override("separation", 8)
 	inner.add_child(play_vbox)
 	play_vbox.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
 	play_vbox.offset_left = -280.0
-	play_vbox.offset_top = -116.0
+	play_vbox.offset_top = -176.0
+
+	online_lobby_button = Button.new()
+	online_lobby_button.name = "OnlineLobbyButton"
+	online_lobby_button.text = "ONLINE LOBBY"
+	online_lobby_button.custom_minimum_size = Vector2(268.0, 52.0)
+	UIStyleHelper.apply_chunky_button_style(online_lobby_button, UIStyleHelper.COLOR_SKY_BLUE, UIStyleHelper.COLOR_SKY_BORDER, 20, 18, 6)
+	online_lobby_button.pressed.connect(func(): set_online_lobby_open(true))
+	play_vbox.add_child(online_lobby_button)
 
 	var mode_lbl := Label.new()
 	mode_lbl.text = "SOLO VS 4 AI OPPONENTS"
@@ -377,6 +400,13 @@ func _build_main_menu_ui() -> void:
 	UIStyleHelper.apply_chunky_button_style(play_button, UIStyleHelper.COLOR_PLAY_GREEN, UIStyleHelper.COLOR_PLAY_BORDER, 32, 24, 9)
 	play_button.pressed.connect(func(): start_matchmaking())
 	play_vbox.add_child(play_button)
+
+
+func _build_online_lobby_modal() -> void:
+	online_modal = OnlineLobbyModal.new()
+	online_modal.name = "OnlineLobbyModal"
+	online_modal.visible = false
+	add_child(online_modal)
 
 
 func _build_how_to_play_modal() -> void:

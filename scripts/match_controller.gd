@@ -854,12 +854,29 @@ func _update_hud_display() -> void:
 	)
 
 
+func _on_replay_requested() -> void:
+	if is_online_match and multiplayer_client and multiplayer_client.is_connected_to_server():
+		var in_room := not multiplayer_client.current_room_code.is_empty()
+		if in_room:
+			multiplayer_client.request_rematch()
+		enter_main_menu()
+		if hud and hud.main_menu:
+			hud.main_menu.set_online_lobby_open(true)
+		if not in_room:
+			multiplayer_client.request_quick_join(2, false)
+		return
+	start_new_match()
+
+
 func return_to_lobby() -> void:
+	var was_online_room := is_online_match and multiplayer_client != null and multiplayer_client.is_connected_to_server() and not multiplayer_client.current_room_code.is_empty()
 	return_to_lobby_requested.emit()
 	if not lobby_scene_path.is_empty() and ResourceLoader.exists(lobby_scene_path):
 		get_tree().change_scene_to_file(lobby_scene_path)
 		return
 	enter_main_menu()
+	if was_online_room and hud and hud.main_menu:
+		hud.main_menu.set_online_lobby_open(true)
 
 
 func _setup_subsystems() -> void:
@@ -902,11 +919,13 @@ func _setup_subsystems() -> void:
 	hud = (hud_scene.instantiate() as HUDController) if hud_scene else HUDController.new()
 	hud.name = "HUDController"
 	add_child(hud)
+	if hud.main_menu and hud.main_menu.online_modal:
+		hud.main_menu.online_modal.bind_client(multiplayer_client)
 
 	hud.play_match_requested.connect(start_new_match)
 	hud.spectator_prev_requested.connect(func(): cycle_spectator_target(-1))
 	hud.spectator_next_requested.connect(func(): cycle_spectator_target(1))
-	hud.replay_requested.connect(start_new_match)
+	hud.replay_requested.connect(_on_replay_requested)
 	hud.return_to_lobby_requested.connect(return_to_lobby)
 	hud.master_volume_changed.connect(func(v: float):
 		if audio_manager:

@@ -38,6 +38,11 @@ var local_peer_id: int = 0
 var local_slot_id: int = -1
 var current_session_id: String = ""
 var current_room_code: String = ""
+var latest_room_state: Dictionary = {}
+var in_matchmaking_queue: bool = false
+var queued_players_count: int = 0
+var last_error_code: String = ""
+var last_error_message: String = ""
 
 var _peer: ENetMultiplayerPeer
 var _mp: SceneMultiplayer
@@ -86,10 +91,13 @@ func connect_to_server(
 func disconnect_from_server() -> void:
 	_in_active_match = false
 	has_welcome = false
+	in_matchmaking_queue = false
+	queued_players_count = 0
 	local_peer_id = 0
 	local_slot_id = -1
 	current_session_id = ""
 	current_room_code = ""
+	latest_room_state.clear()
 	conn_state = ConnState.DISCONNECTED
 	if _mp:
 		_mp.multiplayer_peer = null
@@ -123,6 +131,66 @@ func request_quick_join(required_humans: int = 2, fill_ai: bool = false) -> void
 
 func cancel_queue() -> void:
 	send_message({"type": NetProtocol.C2S_CANCEL_QUEUE}, true)
+
+
+func create_private_room(
+	target_humans: int = 2,
+	fill_ai: bool = false,
+	ai_count: int = 0,
+	custom_code: String = ""
+) -> void:
+	var msg := {
+		"type": NetProtocol.C2S_CREATE_ROOM,
+		"name": player_name,
+		"target_humans": target_humans,
+		"fill_ai": fill_ai,
+		"ai_count": ai_count
+	}
+	if not custom_code.is_empty():
+		msg["custom_code"] = custom_code
+	send_message(msg, true)
+
+
+func join_private_room(room_code: String) -> void:
+	send_message({
+		"type": NetProtocol.C2S_JOIN_ROOM,
+		"name": player_name,
+		"room_code": room_code.strip_edges().to_upper()
+	}, true)
+
+
+func leave_private_room() -> void:
+	send_message({"type": NetProtocol.C2S_LEAVE_ROOM}, true)
+	current_room_code = ""
+	latest_room_state.clear()
+
+
+func set_room_ready(ready_flag: bool) -> void:
+	send_message({
+		"type": NetProtocol.C2S_SET_READY,
+		"ready": ready_flag
+	}, true)
+
+
+func configure_private_room(target_humans: int, fill_ai: bool, ai_count: int) -> void:
+	send_message({
+		"type": NetProtocol.C2S_CONFIGURE_ROOM,
+		"target_humans": target_humans,
+		"fill_ai": fill_ai,
+		"ai_count": ai_count
+	}, true)
+
+
+func start_private_room_match() -> void:
+	send_message({"type": NetProtocol.C2S_START_ROOM_MATCH}, true)
+
+
+func request_rematch() -> void:
+	send_message({"type": NetProtocol.C2S_REQUEST_REMATCH}, true)
+
+
+func is_room_host() -> bool:
+	return not current_room_code.is_empty() and int(latest_room_state.get("host_peer_id", -1)) == local_peer_id
 
 
 func send_message(msg: Dictionary, reliable: bool = true) -> void:
@@ -205,21 +273,27 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			connected_to_game_server.emit(local_peer_id, assigned_name)
 
 		NetProtocol.S2C_ERROR:
-			server_error_received.emit(str(msg.get("code", "ERR")), str(msg.get("message", "Server error")))
+			last_error_code = str(msg.get("code", "ERR"))
+			last_error_message = str(msg.get("message", "Server error"))
+			server_error_received.emit(last_error_code, last_error_message)
 
 		NetProtocol.S2C_QUEUE_STATUS:
+			in_matchmaking_queue = bool(msg.get("in_queue", false))
+			queued_players_count = int(msg.get("queued_count", 0))
 			queue_status_updated.emit(
-				bool(msg.get("in_queue", false)),
-				int(msg.get("queued_count", 0)),
+				in_matchmaking_queue,
+				queued_players_count,
 				int(msg.get("required_count", 2))
 			)
 
 		NetProtocol.S2C_ROOM_STATE:
 			current_room_code = str(msg.get("room_code", current_room_code))
+			latest_room_state = msg.duplicate(true)
 			room_state_updated.emit(msg)
 
 		NetProtocol.S2C_ROOM_CLOSED:
 			current_room_code = ""
+			latest_room_state.clear()
 			room_closed.emit(str(msg.get("reason", "Room closed")))
 
 		NetProtocol.S2C_MATCH_STARTED:
