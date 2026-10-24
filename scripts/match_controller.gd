@@ -93,10 +93,34 @@ func _ready() -> void:
 		return
 	_setup_environment_and_lighting()
 	_setup_subsystems()
+	_apply_client_cli_overrides()
 	if start_on_main_menu:
 		enter_main_menu()
 	else:
 		start_new_match()
+
+
+func _apply_client_cli_overrides() -> void:
+	if not multiplayer_client:
+		return
+	var all_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for arg in all_args:
+		if arg.begins_with("--host="):
+			multiplayer_client.server_host = arg.trim_prefix("--host=").strip_edges()
+		elif arg.begins_with("--port="):
+			multiplayer_client.server_port = int(arg.trim_prefix("--port="))
+		elif arg.begins_with("--name="):
+			multiplayer_client.player_name = NetProtocol.sanitize_player_name(arg.trim_prefix("--name="), multiplayer_client.player_name)
+		elif arg.begins_with("--token="):
+			multiplayer_client.account_token = arg.trim_prefix("--token=").strip_edges()
+	if hud and hud.main_menu and hud.main_menu.online_modal:
+		var modal := hud.main_menu.online_modal
+		if modal.host_input:
+			modal.host_input.text = multiplayer_client.server_host
+		if modal.port_input:
+			modal.port_input.text = str(multiplayer_client.server_port)
+		if modal.name_input:
+			modal.name_input.text = multiplayer_client.player_name
 
 
 func _check_and_run_dedicated_server_cli() -> bool:

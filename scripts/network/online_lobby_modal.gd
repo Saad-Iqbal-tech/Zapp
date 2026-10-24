@@ -11,6 +11,7 @@ var client: MultiplayerClient
 
 # Connection bar controls
 var host_input: LineEdit
+var lan_ip_button: Button
 var port_input: LineEdit
 var name_input: LineEdit
 var connect_button: Button
@@ -58,6 +59,7 @@ var _showing_stats: bool = false
 
 var _in_public_queue: bool = false
 var _local_ready: bool = true
+var _pending_action: Dictionary = {}
 
 
 func _ready() -> void:
@@ -84,12 +86,14 @@ func bind_client(mp_client: MultiplayerClient) -> void:
 	client.connected_to_game_server.connect(_on_client_connected)
 	client.connection_error.connect(_on_client_error)
 	client.disconnected_from_game_server.connect(_on_client_disconnected)
+	client.connection_state_changed.connect(func(_st: int, _txt: String): _refresh_view_state())
 	client.queue_status_updated.connect(_on_queue_status_updated)
 	client.room_state_updated.connect(_on_room_state_updated)
 	client.room_closed.connect(_on_room_closed)
 	client.server_error_received.connect(_on_server_error_received)
 	client.stats_response_received.connect(_on_stats_response_received)
 	client.authoritative_match_started.connect(func(_msg: Dictionary):
+		_pending_action.clear()
 		visible = false
 	)
 	_refresh_view_state()
@@ -97,12 +101,21 @@ func bind_client(mp_client: MultiplayerClient) -> void:
 
 func open_modal() -> void:
 	visible = true
+	if client and host_input and port_input and not client.is_connected_to_server() and not client.is_connecting():
+		host_input.text = client.server_host
+		port_input.text = str(client.server_port)
 	_refresh_view_state()
 
 
 func close_modal() -> void:
 	visible = false
 	closed_modal.emit()
+
+
+func get_displayed_connection_status() -> String:
+	if not client:
+		return "Disconnected"
+	return client.get_connection_status_text()
 
 
 func set_feedback(text: String, is_error: bool = false) -> void:
@@ -115,56 +128,174 @@ func set_feedback(text: String, is_error: bool = false) -> void:
 	)
 
 
+func _parse_and_validate_endpoint() -> Dictionary:
+	var raw_host := host_input.text.strip_edges() if host_input else NetProtocol.DEFAULT_HOST
+	var raw_port_str := port_input.text.strip_edges() if port_input else str(NetProtocol.DEFAULT_PORT)
+	var p_name := name_input.text.strip_edges() if name_input else "STRIKER_01"
+	if p_name.is_empty():
+		p_name = client.player_name if client else "STRIKER_01"
+
+	if not NetProtocol.is_valid_host_or_ip(raw_host):
+		return {
+			"valid": false,
+			"error": "Invalid Server IP/Address '%s'. Enter a valid IPv4 address (e.g. 127.0.0.1 or LAN IP)." % raw_host
+		}
+
+	if not raw_port_str.is_valid_int():
+		return {
+			"valid": false,
+			"error": "Invalid Port '%s'. Enter a numeric UDP port between 1 and 65535." % raw_port_str
+		}
+
+	var port_num := int(raw_port_str)
+	if not NetProtocol.is_valid_port(port_num):
+		return {
+			"valid": false,
+			"error": "Invalid Port %d. Port must be between 1 and 65535." % port_num
+		}
+
+	return {
+		"valid": true,
+		"host": raw_host,
+		"port": port_num,
+		"name": p_name
+	}
+
+
+func _initiate_connection_from_inputs(status_prefix: String = "") -> bool:
+	if not client:
+		return false
+
+	var ep := _parse_and_validate_endpoint()
+	if not bool(ep.get("valid", false)):
+		_pending_action.clear()
+		var err_msg := str(ep.get("error", "Invalid server configuration."))
+		client._transition_to_connection_failed(err_msg)
+		set_feedback("Connection Failed: %s" % err_msg, true)
+		_refresh_view_state()
+		return false
+
+	var host: String = ep["host"]
+	var port: int = ep["port"]
+	var p_name: String = ep["name"]
+
+	client.save_connection_preferences(host, port, p_name)
+
+	if client.is_connecting() and client.server_host == host and client.server_port == port:
+		if not status_prefix.is_empty():
+			set_feedback(status_prefix, false)
+		_refresh_view_state()
+		return true
+
+	var banner_msg := status_prefix if not status_prefix.is_empty() else ("Connecting to %s:%d..." % [host, port])
+	set_feedback(banner_msg, false)
+	var err := client.connect_to_server(host, port, p_name)
+	_refresh_view_state()
+	return err == OK
+
+
+func _on_lan_ip_button_pressed() -> void:
+	if not host_input:
+		return
+	var detected_lan := NetProtocol.detect_lan_ipv4()
+	if host_input.text.strip_edges() == NetProtocol.DEFAULT_HOST and detected_lan != NetProtocol.DEFAULT_HOST:
+		host_input.text = detected_lan
+		set_feedback("Set Server IP to detected LAN address (%s) for Wi-Fi / Android play." % detected_lan, false)
+	else:
+		host_input.text = NetProtocol.DEFAULT_HOST
+		set_feedback("Set Server IP to localhost (%s) for local PC testing." % NetProtocol.DEFAULT_HOST, false)
+
+
 func _on_connect_button_pressed() -> void:
 	if not client:
 		return
-	if client.conn_state != MultiplayerClient.ConnState.DISCONNECTED:
+	if client.is_connected_to_server() or client.is_connecting():
+		_pending_action.clear()
 		client.disconnect_from_server()
 		_in_public_queue = false
 		set_feedback("Disconnected from server.", false)
 		_refresh_view_state()
 		return
 
-	var host := host_input.text.strip_edges() if host_input else NetProtocol.DEFAULT_HOST
-	var port := int(port_input.text.strip_edges()) if port_input else NetProtocol.DEFAULT_PORT
-	var p_name := name_input.text.strip_edges() if name_input else "STRIKER_01"
-	set_feedback("Connecting to %s:%d..." % [host, port], false)
-	client.connect_to_server(host, port, p_name)
-	_refresh_view_state()
+	_pending_action.clear()
+	_initiate_connection_from_inputs()
 
 
 func _on_public_queue_pressed() -> void:
-	if not client or not client.is_connected_to_server():
-		set_feedback("PUBLIC MATCHMAKING UNAVAILABLE: Connect to a running Dedicated Server first.", true)
+	if not client:
 		return
+
+	if not client.is_connected_to_server():
+		# Auto-connect when user clicks Join Public Lobby while disconnected
+		_pending_action = {
+			"type": "public_queue",
+			"required_humans": 2,
+			"fill_ai": false
+		}
+		_initiate_connection_from_inputs("Connecting to server to join Public Matchmaking...")
+		return
+
 	if _in_public_queue:
 		client.cancel_queue()
 	else:
 		if name_input:
 			client.player_name = NetProtocol.sanitize_player_name(name_input.text, client.player_name)
+		set_feedback("Joining Public Matchmaking Queue...", false)
 		client.request_quick_join(2, false)
+	_refresh_view_state()
 
 
 func _on_create_room_pressed() -> void:
-	if not client or not client.is_connected_to_server():
-		set_feedback("Cannot create room: Connect to the Dedicated Server first.", true)
+	if not client:
 		return
+
+	if not client.is_connected_to_server():
+		# Auto-connect when user clicks Create Room while disconnected
+		_pending_action = {
+			"type": "create_room",
+			"target_humans": 2,
+			"fill_ai": false,
+			"ai_count": 0
+		}
+		_initiate_connection_from_inputs("Connecting to server to create Private Room...")
+		return
+
+	if client.is_room_request_in_flight() or not client.current_room_code.is_empty():
+		return
+
 	if name_input:
 		client.player_name = NetProtocol.sanitize_player_name(name_input.text, client.player_name)
+	set_feedback("Creating Private Room...", false)
 	client.create_private_room(2, false, 0)
+	_refresh_view_state()
 
 
 func _on_join_room_pressed() -> void:
-	if not client or not client.is_connected_to_server():
-		set_feedback("Cannot join room: Connect to the Dedicated Server first.", true)
+	if not client:
 		return
+
 	var code := room_code_input.text.strip_edges().to_upper() if room_code_input else ""
 	if code.is_empty():
 		set_feedback("Enter a 5-character Room Code to join.", true)
 		return
+
+	if not client.is_connected_to_server():
+		# Auto-connect when user clicks Join Room while disconnected
+		_pending_action = {
+			"type": "join_room",
+			"code": code
+		}
+		_initiate_connection_from_inputs("Connecting to server to join Room %s..." % code)
+		return
+
+	if client.is_room_request_in_flight():
+		return
+
 	if name_input:
 		client.player_name = NetProtocol.sanitize_player_name(name_input.text, client.player_name)
+	set_feedback("Joining Room %s..." % code, false)
 	client.join_private_room(code)
+	_refresh_view_state()
 
 
 func _adjust_room_config(delta_humans: int, toggle_ai: bool, delta_ai: int) -> void:
@@ -212,19 +343,47 @@ func _on_leave_room_pressed() -> void:
 func _on_client_connected(peer_id: int, assigned_name: String) -> void:
 	if name_input:
 		name_input.text = assigned_name
-	set_feedback("Connected to Dedicated Server as %s (ID #%d)." % [assigned_name, peer_id], false)
+
+	if not _pending_action.is_empty() and client and client.is_connected_to_server():
+		var action := _pending_action.duplicate(true)
+		_pending_action.clear()
+		var act_type := str(action.get("type", ""))
+		match act_type:
+			"create_room":
+				set_feedback("Connected as %s (#%d) — creating Private Room..." % [assigned_name, peer_id], false)
+				client.create_private_room(
+					int(action.get("target_humans", 2)),
+					bool(action.get("fill_ai", false)),
+					int(action.get("ai_count", 0))
+				)
+			"join_room":
+				var code := str(action.get("code", ""))
+				set_feedback("Connected as %s (#%d) — joining Room %s..." % [assigned_name, peer_id, code], false)
+				client.join_private_room(code)
+			"public_queue":
+				set_feedback("Connected as %s (#%d) — joining Public Matchmaking..." % [assigned_name, peer_id], false)
+				client.request_quick_join(
+					int(action.get("required_humans", 2)),
+					bool(action.get("fill_ai", false))
+				)
+			_:
+				set_feedback("Connected to Dedicated Server as %s (ID #%d)." % [assigned_name, peer_id], false)
+	else:
+		set_feedback("Connected to Dedicated Server as %s (ID #%d)." % [assigned_name, peer_id], false)
 	_refresh_view_state()
 
 
 func _on_client_error(reason: String) -> void:
+	_pending_action.clear()
 	_in_public_queue = false
-	set_feedback("SERVER UNAVAILABLE: %s" % reason, true)
+	set_feedback("Connection Failed: %s" % reason, true)
 	_refresh_view_state()
 
 
 func _on_client_disconnected(reason: String) -> void:
+	_pending_action.clear()
 	_in_public_queue = false
-	set_feedback("Disconnected: %s" % reason, true)
+	set_feedback("Connection Failed / Disconnected: %s" % reason, true)
 	_refresh_view_state()
 
 
@@ -238,6 +397,7 @@ func _on_queue_status_updated(in_queue: bool, queued_count: int, required_count:
 
 
 func _on_room_state_updated(room_msg: Dictionary) -> void:
+	_pending_action.clear()
 	_in_public_queue = false
 	var code := str(room_msg.get("room_code", ""))
 	set_feedback("In Private Room %s" % code, false)
@@ -245,11 +405,13 @@ func _on_room_state_updated(room_msg: Dictionary) -> void:
 
 
 func _on_room_closed(reason: String) -> void:
+	_pending_action.clear()
 	set_feedback("Room closed: %s" % reason, false)
 	_refresh_view_state()
 
 
 func _on_server_error_received(code: String, message: String) -> void:
+	_pending_action.clear()
 	set_feedback("[%s] %s" % [code, message], true)
 	_refresh_view_state()
 
@@ -269,23 +431,42 @@ func _refresh_view_state() -> void:
 	if not is_inside_tree():
 		return
 
-	var connected := client != null and client.is_connected_to_server()
-	var connecting := client != null and client.conn_state == MultiplayerClient.ConnState.CONNECTING
-	var in_room := connected and not client.current_room_code.is_empty()
+	var status_str := get_displayed_connection_status()
+	var connected := (status_str == "Connected")
+	var connecting := (status_str == "Connecting")
+	var failed := (status_str == "Connection Failed")
+	var in_room := connected and client != null and not client.current_room_code.is_empty()
+	var req_in_flight := client != null and client.is_room_request_in_flight()
 
 	if conn_status_label:
 		if connected:
-			conn_status_label.text = "ONLINE • ID #%d" % client.local_peer_id
+			conn_status_label.text = "Connected (ID #%d)" % client.local_peer_id
 			conn_status_label.add_theme_color_override("font_color", Color(0.25, 1.0, 0.55))
 		elif connecting:
-			conn_status_label.text = "CONNECTING..."
+			conn_status_label.text = "Connecting"
 			conn_status_label.add_theme_color_override("font_color", UIStyleHelper.COLOR_GOLD)
+		elif failed:
+			conn_status_label.text = "Connection Failed"
+			conn_status_label.add_theme_color_override("font_color", Color(1.0, 0.35, 0.35))
 		else:
-			conn_status_label.text = "OFFLINE"
-			conn_status_label.add_theme_color_override("font_color", Color(1.0, 0.45, 0.45))
+			conn_status_label.text = "Disconnected"
+			conn_status_label.add_theme_color_override("font_color", Color(0.78, 0.82, 0.90))
+
+	if host_input:
+		host_input.editable = not (connected or connecting)
+	if port_input:
+		port_input.editable = not (connected or connecting)
+	if lan_ip_button:
+		lan_ip_button.disabled = (connected or connecting)
 
 	if connect_button:
-		connect_button.text = "DISCONNECT" if (connected or connecting) else "CONNECT"
+		if connected:
+			connect_button.text = "DISCONNECT"
+		elif connecting:
+			connect_button.text = "CANCEL"
+		else:
+			connect_button.text = "CONNECT"
+
 	if stats_button:
 		stats_button.text = "BACK TO LOBBY" if _showing_stats else "STATS & RANKS"
 
@@ -301,11 +482,24 @@ func _refresh_view_state() -> void:
 		return
 
 	if not in_room:
+		var busy := connecting or req_in_flight or (not _pending_action.is_empty())
 		if public_queue_button:
-			public_queue_button.text = "CANCEL QUEUE" if _in_public_queue else "FIND PUBLIC MATCH"
+			public_queue_button.text = "CANCEL QUEUE" if _in_public_queue else ("CONNECTING..." if (connecting and _pending_action.get("type") == "public_queue") else "FIND PUBLIC MATCH")
+			public_queue_button.disabled = busy and not _in_public_queue
+		if create_room_button:
+			create_room_button.text = "CREATING..." if (req_in_flight or _pending_action.get("type") == "create_room") else "CREATE PRIVATE ROOM"
+			create_room_button.disabled = busy
+		if join_room_button:
+			join_room_button.text = "JOINING..." if (req_in_flight or _pending_action.get("type") == "join_room") else "JOIN ROOM"
+			join_room_button.disabled = busy
 		if queue_status_label:
-			if not connected:
-				queue_status_label.text = "Connect to a Dedicated Server above to join Public Matchmaking or Private Rooms."
+			if connecting:
+				queue_status_label.text = "Connecting to Dedicated Server (%s:%d)..." % [
+					client.server_host if client else NetProtocol.DEFAULT_HOST,
+					client.server_port if client else NetProtocol.DEFAULT_PORT
+				]
+			elif not connected:
+				queue_status_label.text = "Tap any action below to auto-connect to the Dedicated Server, or tap CONNECT above."
 			elif _in_public_queue:
 				queue_status_label.text = "Searching for real connected players on server..."
 			else:
@@ -428,7 +622,7 @@ func _build_ui() -> void:
 	top_hbox.add_child(title_lbl)
 
 	conn_status_label = Label.new()
-	conn_status_label.text = "OFFLINE"
+	conn_status_label.text = "Disconnected"
 	conn_status_label.add_theme_font_size_override("font_size", 15)
 	top_hbox.add_child(conn_status_label)
 
@@ -464,8 +658,17 @@ func _build_ui() -> void:
 	host_input = LineEdit.new()
 	host_input.name = "ServerHostInput"
 	host_input.text = NetProtocol.DEFAULT_HOST
-	host_input.custom_minimum_size = Vector2(165.0, 36.0)
+	host_input.placeholder_text = "127.0.0.1 or LAN IP"
+	host_input.custom_minimum_size = Vector2(150.0, 36.0)
 	srv_hbox.add_child(host_input)
+
+	lan_ip_button = Button.new()
+	lan_ip_button.name = "LanIpToggleButton"
+	lan_ip_button.text = "LAN IP"
+	lan_ip_button.custom_minimum_size = Vector2(68.0, 36.0)
+	UIStyleHelper.apply_chunky_button_style(lan_ip_button, UIStyleHelper.COLOR_PURPLE, UIStyleHelper.COLOR_PURPLE_BORDER, 12, 8, 3)
+	lan_ip_button.pressed.connect(_on_lan_ip_button_pressed)
+	srv_hbox.add_child(lan_ip_button)
 
 	var port_lbl := Label.new()
 	port_lbl.text = "Port:"

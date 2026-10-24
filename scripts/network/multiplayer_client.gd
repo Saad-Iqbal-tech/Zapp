@@ -20,18 +20,20 @@ signal authoritative_arena_shrink_event(shrink_msg: Dictionary)
 signal authoritative_player_disconnected(disc_msg: Dictionary)
 signal authoritative_match_ended(end_msg: Dictionary)
 signal stats_response_received(stats_msg: Dictionary)
+signal connection_state_changed(new_state: ConnState, status_text: String)
 
 enum ConnState {
 	DISCONNECTED,
 	CONNECTING,
-	CONNECTED
+	CONNECTED,
+	CONNECTION_FAILED
 }
 
 var server_host: String = NetProtocol.DEFAULT_HOST
 var server_port: int = NetProtocol.DEFAULT_PORT
 var player_name: String = "STRIKER_01"
 var account_token: String = ""
-var connect_timeout_sec: float = 6.0
+var connect_timeout_sec: float = 4.5
 
 var conn_state: ConnState = ConnState.DISCONNECTED
 var has_welcome: bool = false
@@ -50,11 +52,14 @@ var last_error_message: String = ""
 var _peer: ENetMultiplayerPeer
 var _mp: SceneMultiplayer
 var _connect_elapsed: float = 0.0
+var _connect_retry_accum: float = 0.0
 var _input_send_accum: float = 0.0
 var _input_seq: int = 0
 var _pending_move_input: Vector2 = Vector2.ZERO
 var _pending_aim_input: Vector2 = Vector2(0.0, 1.0)
 var _in_active_match: bool = false
+var _room_request_in_flight: bool = false
+var _room_request_elapsed: float = 0.0
 
 
 func _ready() -> void:
@@ -68,14 +73,27 @@ func _ready() -> void:
 	_mp.peer_packet.connect(_on_peer_packet)
 
 
+func _exit_tree() -> void:
+	disconnect_from_server()
+	if _mp:
+		_mp.clear()
+		_mp = null
+
+
 func _load_or_generate_account_token() -> String:
 	var cfg_path := "user://client_account.cfg"
 	var cfg := ConfigFile.new()
 	if cfg.load(cfg_path) == OK:
 		var saved_tok := str(cfg.get_value("account", "token", ""))
 		var saved_name := str(cfg.get_value("account", "username", ""))
+		var saved_host := str(cfg.get_value("network", "server_host", ""))
+		var saved_port := int(cfg.get_value("network", "server_port", 0))
 		if not saved_name.is_empty():
 			player_name = NetProtocol.sanitize_player_name(saved_name, player_name)
+		if server_host == NetProtocol.DEFAULT_HOST and NetProtocol.is_valid_host_or_ip(saved_host):
+			server_host = saved_host.strip_edges()
+		if server_port == NetProtocol.DEFAULT_PORT and NetProtocol.is_valid_port(saved_port):
+			server_port = saved_port
 		if not saved_tok.is_empty():
 			return saved_tok
 
@@ -83,38 +101,57 @@ func _load_or_generate_account_token() -> String:
 	var new_tok := crypto.generate_random_bytes(16).hex_encode()
 	cfg.set_value("account", "token", new_tok)
 	cfg.set_value("account", "username", player_name)
+	cfg.set_value("network", "server_host", server_host)
+	cfg.set_value("network", "server_port", server_port)
 	cfg.save(cfg_path)
 	return new_tok
 
 
-func connect_to_server(
-	host: String = NetProtocol.DEFAULT_HOST,
-	port: int = NetProtocol.DEFAULT_PORT,
-	requested_name: String = ""
-) -> Error:
-	disconnect_from_server()
-
-	server_host = host.strip_edges() if not host.strip_edges().is_empty() else NetProtocol.DEFAULT_HOST
-	server_port = port if port > 0 else NetProtocol.DEFAULT_PORT
-	if not requested_name.strip_edges().is_empty():
-		player_name = NetProtocol.sanitize_player_name(requested_name, player_name)
-
-	_peer = ENetMultiplayerPeer.new()
-	var err := _peer.create_client(server_host, server_port, 2)
-	if err != OK:
-		conn_state = ConnState.DISCONNECTED
-		connection_error.emit("Could not create client for %s:%d (error %d)" % [server_host, server_port, err])
-		return err
-
-	_mp.multiplayer_peer = _peer
-	conn_state = ConnState.CONNECTING
-	_connect_elapsed = 0.0
-	return OK
+func save_connection_preferences(host: String, port: int, name_str: String = "") -> void:
+	var cfg_path := "user://client_account.cfg"
+	var cfg := ConfigFile.new()
+	cfg.load(cfg_path)
+	if not account_token.is_empty():
+		cfg.set_value("account", "token", account_token)
+	var clean_name := NetProtocol.sanitize_player_name(name_str if not name_str.is_empty() else player_name, player_name)
+	cfg.set_value("account", "username", clean_name)
+	if NetProtocol.is_valid_host_or_ip(host):
+		cfg.set_value("network", "server_host", host.strip_edges())
+	if NetProtocol.is_valid_port(port):
+		cfg.set_value("network", "server_port", port)
+	cfg.save(cfg_path)
 
 
-func disconnect_from_server() -> void:
+func get_connection_status_text() -> String:
+	match conn_state:
+		ConnState.CONNECTED:
+			return "Connected" if has_welcome else "Connecting"
+		ConnState.CONNECTING:
+			return "Connecting"
+		ConnState.CONNECTION_FAILED:
+			return "Connection Failed"
+		_:
+			return "Disconnected"
+
+
+func is_connecting() -> bool:
+	return conn_state == ConnState.CONNECTING or (conn_state == ConnState.CONNECTED and not has_welcome)
+
+
+func is_room_request_in_flight() -> bool:
+	return _room_request_in_flight
+
+
+func _set_conn_state(new_state: ConnState) -> void:
+	conn_state = new_state
+	connection_state_changed.emit(conn_state, get_connection_status_text())
+
+
+func _reset_peer_state(target_state: ConnState, emit_change: bool = true) -> void:
 	_in_active_match = false
 	has_welcome = false
+	_room_request_in_flight = false
+	_room_request_elapsed = 0.0
 	in_matchmaking_queue = false
 	queued_players_count = 0
 	local_peer_id = 0
@@ -122,12 +159,67 @@ func disconnect_from_server() -> void:
 	current_session_id = ""
 	current_room_code = ""
 	latest_room_state.clear()
-	conn_state = ConnState.DISCONNECTED
 	if _mp:
 		_mp.multiplayer_peer = null
 	if _peer:
 		_peer.close()
 		_peer = null
+	conn_state = target_state
+	if emit_change:
+		connection_state_changed.emit(conn_state, get_connection_status_text())
+
+
+func _transition_to_connection_failed(reason: String) -> void:
+	last_error_code = "ERR_CONNECTION_FAILED"
+	last_error_message = reason
+	_reset_peer_state(ConnState.CONNECTION_FAILED, true)
+	connection_error.emit(reason)
+
+
+func connect_to_server(
+	host: String = NetProtocol.DEFAULT_HOST,
+	port: int = NetProtocol.DEFAULT_PORT,
+	requested_name: String = ""
+) -> Error:
+	var clean_host := host.strip_edges()
+	if not requested_name.strip_edges().is_empty():
+		player_name = NetProtocol.sanitize_player_name(requested_name, player_name)
+
+	# Prevent duplicate connection attempts while already connecting to the same endpoint
+	if is_connecting() and clean_host == server_host and port == server_port:
+		return OK
+
+	if not NetProtocol.is_valid_host_or_ip(clean_host):
+		_transition_to_connection_failed("Invalid server IP/host '%s'. Enter a valid IPv4 address or hostname." % clean_host)
+		return ERR_INVALID_PARAMETER
+
+	if not NetProtocol.is_valid_port(port):
+		_transition_to_connection_failed("Invalid server port (%d). Port must be between 1 and 65535." % port)
+		return ERR_INVALID_PARAMETER
+
+	_reset_peer_state(ConnState.DISCONNECTED, false)
+	server_host = clean_host
+	server_port = port
+
+	_peer = ENetMultiplayerPeer.new()
+	var err := _peer.create_client(server_host, server_port, 2)
+	if err != OK:
+		_transition_to_connection_failed("Could not create client for %s:%d (error %d)" % [server_host, server_port, err])
+		return err
+
+	_mp.multiplayer_peer = _peer
+	_connect_elapsed = 0.0
+	_connect_retry_accum = 0.0
+	_set_conn_state(ConnState.CONNECTING)
+	return OK
+
+
+func disconnect_from_server() -> void:
+	if _peer and conn_state == ConnState.CONNECTED:
+		_peer.disconnect_peer(1, true)
+		if _mp and _mp.has_multiplayer_peer():
+			_mp.poll()
+	_reset_peer_state(ConnState.DISCONNECTED, true)
 
 
 func is_connected_to_server() -> bool:
@@ -163,6 +255,10 @@ func create_private_room(
 	ai_count: int = 0,
 	custom_code: String = ""
 ) -> void:
+	if not is_connected_to_server() or _room_request_in_flight:
+		return
+	_room_request_in_flight = true
+	_room_request_elapsed = 0.0
 	var msg := {
 		"type": NetProtocol.C2S_CREATE_ROOM,
 		"name": player_name,
@@ -176,14 +272,23 @@ func create_private_room(
 
 
 func join_private_room(room_code: String) -> void:
+	if not is_connected_to_server() or _room_request_in_flight:
+		return
+	var clean_code := room_code.strip_edges().to_upper()
+	if clean_code.is_empty():
+		return
+	_room_request_in_flight = true
+	_room_request_elapsed = 0.0
 	send_message({
 		"type": NetProtocol.C2S_JOIN_ROOM,
 		"name": player_name,
-		"room_code": room_code.strip_edges().to_upper()
+		"room_code": clean_code
 	}, true)
 
 
 func leave_private_room() -> void:
+	_room_request_in_flight = false
+	_room_request_elapsed = 0.0
 	send_message({"type": NetProtocol.C2S_LEAVE_ROOM}, true)
 	current_room_code = ""
 	latest_room_state.clear()
@@ -231,18 +336,37 @@ func send_message(msg: Dictionary, reliable: bool = true) -> void:
 
 
 func _process(delta: float) -> void:
-	if conn_state == ConnState.DISCONNECTED or not _mp:
+	if conn_state == ConnState.DISCONNECTED or conn_state == ConnState.CONNECTION_FAILED or not _mp:
 		return
 
 	if _mp.has_multiplayer_peer():
 		_mp.poll()
 
-	if conn_state == ConnState.CONNECTING:
+	if is_connecting():
 		_connect_elapsed += delta
+		_connect_retry_accum += delta
 		if _connect_elapsed >= connect_timeout_sec:
-			disconnect_from_server()
-			connection_error.emit("Connection timed out (%s:%d)" % [server_host, server_port])
+			_transition_to_connection_failed(
+				"Connection timed out (%s:%d) — verify Dedicated Server is running." % [server_host, server_port]
+			)
+			return
+		# If still waiting on initial UDP handshake (e.g. server just finished booting), send a fresh attempt every 1.0s
+		if conn_state == ConnState.CONNECTING and _connect_retry_accum >= 1.0 and (_connect_elapsed + 0.5) < connect_timeout_sec:
+			_connect_retry_accum = 0.0
+			if _mp:
+				_mp.multiplayer_peer = null
+			if _peer:
+				_peer.close()
+			_peer = ENetMultiplayerPeer.new()
+			if _peer.create_client(server_host, server_port, 2) == OK:
+				_mp.multiplayer_peer = _peer
 		return
+
+	if _room_request_in_flight:
+		_room_request_elapsed += delta
+		if _room_request_elapsed >= 4.0:
+			_room_request_in_flight = false
+			_room_request_elapsed = 0.0
 
 	if conn_state == ConnState.CONNECTED and _in_active_match:
 		_input_send_accum += delta
@@ -267,6 +391,10 @@ func _transmit_current_input() -> void:
 func _on_connected_to_server() -> void:
 	conn_state = ConnState.CONNECTED
 	local_peer_id = _mp.get_unique_id()
+	if _peer:
+		var pkt_peer := _peer.get_peer(1)
+		if pkt_peer:
+			pkt_peer.set_timeout(1000, 2000, 3500)
 	send_message({
 		"type": NetProtocol.C2S_HELLO,
 		"name": player_name,
@@ -275,13 +403,19 @@ func _on_connected_to_server() -> void:
 
 
 func _on_connection_failed() -> void:
-	disconnect_from_server()
-	connection_error.emit("Failed to connect to server %s:%d" % [server_host, server_port])
+	_transition_to_connection_failed("Connection refused or unreachable (%s:%d)" % [server_host, server_port])
 
 
 func _on_server_disconnected() -> void:
-	disconnect_from_server()
-	disconnected_from_game_server.emit("Disconnected from server")
+	var was_welcomed := has_welcome
+	var reason := "Lost connection to server (%s:%d)" % [server_host, server_port]
+	last_error_code = "ERR_SERVER_DISCONNECTED"
+	last_error_message = reason
+	_reset_peer_state(ConnState.CONNECTION_FAILED, true)
+	if was_welcomed:
+		disconnected_from_game_server.emit(reason)
+	else:
+		connection_error.emit(reason)
 
 
 func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
@@ -302,9 +436,12 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			player_name = assigned_name
 			if msg.has("profile") and typeof(msg["profile"]) == TYPE_DICTIONARY:
 				latest_profile = msg["profile"]
+			connection_state_changed.emit(conn_state, get_connection_status_text())
 			connected_to_game_server.emit(local_peer_id, assigned_name)
 
 		NetProtocol.S2C_ERROR:
+			_room_request_in_flight = false
+			_room_request_elapsed = 0.0
 			last_error_code = str(msg.get("code", "ERR"))
 			last_error_message = str(msg.get("message", "Server error"))
 			server_error_received.emit(last_error_code, last_error_message)
@@ -319,11 +456,15 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			)
 
 		NetProtocol.S2C_ROOM_STATE:
+			_room_request_in_flight = false
+			_room_request_elapsed = 0.0
 			current_room_code = str(msg.get("room_code", current_room_code))
 			latest_room_state = msg.duplicate(true)
 			room_state_updated.emit(msg)
 
 		NetProtocol.S2C_ROOM_CLOSED:
+			_room_request_in_flight = false
+			_room_request_elapsed = 0.0
 			current_room_code = ""
 			latest_room_state.clear()
 			room_closed.emit(str(msg.get("reason", "Room closed")))

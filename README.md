@@ -44,16 +44,17 @@ You can launch the authoritative headless server in either of two ways (no windo
    & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --path .
    ```
 3. On both clients, tap **ONLINE LOBBY** on the bottom-right of the Main Menu:
-   - Leave **Server IP** as `127.0.0.1` and **Port** as `7777`, enter a player name, and tap **CONNECT**.
+   - Leave **Server IP** as `127.0.0.1` and **Port** as `7777` (or tap **LAN IP** to toggle to your PC's detected local Wi-Fi IPv4 address for Android/LAN testing).
+   - **Auto-Connect or Manual Connect**: You can tap **CONNECT** directly, or simply tap **CREATE PRIVATE ROOM**, **JOIN ROOM**, or **FIND PUBLIC MATCH** while `Disconnected`—the client will automatically connect to the configured Server IP/Port and execute your requested action as soon as the server handshake (`S2C_WELCOME`) completes.
    - **Public Matchmaking**: Tap **FIND PUBLIC MATCH** on both clients. Once 2 connected players are in the queue, the server launches the match automatically.
-   - **Private Room**: On Client 1, tap **CREATE PRIVATE ROOM** and note the 5-character **Room Code** (e.g. `K7X9P`). Optionally configure the number of Human slots (`1..5`) and AI Fill (`0..4` bots). On Client 2, enter the 5-character code, tap **JOIN ROOM**, and tap **READY UP!**. On Client 1 (Host), tap **START MATCH!**.
+   - **Private Room**: On Client 1, tap **CREATE PRIVATE ROOM** and note the 5-character **Room Code** (e.g. `W3UG9`). Optionally configure the number of Human slots (`1..5`) and AI Fill (`0..4` bots). On Client 2, enter the 5-character code, tap **JOIN ROOM**, and tap **READY UP!**. On Client 1 (Host), tap **START MATCH!**.
 
 ### How to Test Across Two Different Devices (Android / LAN)
 1. Connect your development computer (running the headless server) and your Android phone(s) or second computer to the same Wi-Fi / LAN network.
-2. Find your development computer's local LAN IPv4 address (e.g., `ipconfig` on Windows -> `192.168.1.50`).
+2. Find your development computer's local LAN IPv4 address (e.g., `ipconfig` on Windows -> `192.168.10.3`, or tap the **LAN IP** button in the Online Lobby on the host PC to view it).
 3. Ensure Windows Defender Firewall allows inbound **UDP port `7777`** (see Section 3 below).
 4. Export and install the Android APK (`export_presets.cfg` includes the Android preset with `INTERNET` and `ACCESS_NETWORK_STATE` permissions pre-enabled; requires Godot 4.7.2 export templates installed in the Godot Editor).
-5. In the game's **ONLINE LOBBY**, replace `127.0.0.1` with your computer's LAN IP (`192.168.1.50`), keep Port `7777`, and tap **CONNECT**.
+5. In the game's **ONLINE LOBBY**, enter your computer's LAN IP (`192.168.10.3`), keep Port `7777`, and tap **CONNECT** (or tap **CREATE PRIVATE ROOM** / **JOIN ROOM** / **FIND PUBLIC MATCH** to auto-connect). The configured Server IP and Port are saved automatically in `user://client_account.cfg`.
 
 ---
 
@@ -152,10 +153,11 @@ You can launch the authoritative headless server in either of two ways (no windo
 │   ├── mobile_controls.gd                # Dual-thumb virtual movement joystick and aiming pad
 │   └── ui_style_helper.gd                # Reusable chunky 3D-beveled StyleBox & button bounce helper
 ├── tests/
-│   ├── test_survival_arena.gd            # Local AI & UI test suite (61 checks)
-│   ├── test_phase1_multiplayer.gd        # Phase 1 authoritative server/client test suite (27 checks)
-│   ├── test_phase2_lobby_and_rooms.gd    # Phase 2 private rooms, matchmaking & AI fill suite (30 checks)
-│   └── test_phase3_persistence_and_stats.gd # Phase 3 accounts, stats & leaderboard suite (12 checks)
+│   ├── test_survival_arena.gd               # Local AI & UI test suite (61 checks)
+│   ├── test_phase1_multiplayer.gd           # Phase 1 authoritative server/client test suite (27 checks)
+│   ├── test_phase2_lobby_and_rooms.gd       # Phase 2 private rooms, matchmaking & AI fill suite (30 checks)
+│   ├── test_phase3_persistence_and_stats.gd # Phase 3 accounts, stats & leaderboard suite (12 checks)
+│   └── test_e2e_multiprocess_verification.gd # Multi-process E2E verification & auto-connect suite (32 checks)
 └── ui/
     ├── hud.tscn
     ├── main_menu_overlay.tscn
@@ -166,7 +168,7 @@ You can launch the authoritative headless server in either of two ways (no windo
 
 ## 6. Running All Automated Test Suites
 
-Run all four automated test suites (`130 total assertions`) from PowerShell:
+Run all five automated test suites (`162 total assertions`) from PowerShell:
 
 ```powershell
 # 1. Local Single-Player AI & UI Suite (61 assertions)
@@ -180,4 +182,7 @@ Run all four automated test suites (`130 total assertions`) from PowerShell:
 
 # 4. Phase 3: Persistent Accounts, Server-Validated Stats & Leaderboards (12 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase3_persistence_and_stats.gd
+
+# 5. End-to-End Multi-Process Verification & Auto-Connect Stabilization Suite (32 assertions)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_e2e_multiprocess_verification.gd
 ```

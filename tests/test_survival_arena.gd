@@ -246,8 +246,9 @@ func _run_all_tests() -> void:
 	_assert(match_ctrl.current_phase == MatchController.MatchPhase.MAIN_MENU, "Return to Main Menu transitions back to 3D Lobby")
 	_assert(match_ctrl.hud.is_in_main_menu() == true, "Main Menu UI is restored after returning from match")
 
+	match_ctrl.queue_free()
 	await process_frame
-	match_ctrl.free()
+	await process_frame
 
 	print("=== TEST SUMMARY: %d PASSED, %d FAILED ===" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)

@@ -81,3 +81,50 @@ static func sanitize_player_name(raw_name: Variant, fallback: String = "PLAYER")
 	if out.is_empty():
 		return fallback
 	return out.to_upper()
+
+
+static func is_valid_port(port: int) -> bool:
+	return port >= 1 and port <= 65535
+
+
+static func is_valid_host_or_ip(raw_host: String) -> bool:
+	var h := raw_host.strip_edges()
+	if h.is_empty() or h.length() > 253:
+		return false
+	if h == "localhost":
+		return true
+	if h.is_valid_ip_address():
+		return true
+
+	# Check if it looks like a malformed numeric IPv4 (all digits and dots, e.g. "999.999.999.999" or "127.0.0.1.5")
+	var all_digits_or_dots := true
+	for i in range(h.length()):
+		var ch := h[i]
+		var code := ch.unicode_at(0)
+		var is_digit := (code >= 48 and code <= 57)
+		if not is_digit and ch != ".":
+			all_digits_or_dots = false
+		var is_alpha := (code >= 65 and code <= 90) or (code >= 97 and code <= 122)
+		if not is_digit and not is_alpha and ch != "." and ch != "-":
+			return false
+	if all_digits_or_dots:
+		return false
+	if h.begins_with(".") or h.ends_with(".") or h.begins_with("-") or h.ends_with("-") or h.find("..") != -1:
+		return false
+	return true
+
+
+static func detect_lan_ipv4() -> String:
+	var addresses := IP.get_local_addresses()
+	var fallback_ipv4 := ""
+	for addr in addresses:
+		var a := str(addr).strip_edges()
+		if not a.is_valid_ip_address() or a.find(":") != -1:
+			continue
+		if a == "127.0.0.1" or a.begins_with("169.254."):
+			continue
+		if a.begins_with("192.168.") or a.begins_with("10.") or a.begins_with("172."):
+			return a
+		if fallback_ipv4.is_empty():
+			fallback_ipv4 = a
+	return fallback_ipv4 if not fallback_ipv4.is_empty() else DEFAULT_HOST

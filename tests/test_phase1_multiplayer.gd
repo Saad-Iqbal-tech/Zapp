@@ -216,17 +216,18 @@ func _run_phase1_tests() -> void:
 	_assert(ext_connected and ext_client.local_peer_id > 1, "Client connects over UDP to standalone headless server OS process")
 
 	ext_client.disconnect_from_server()
-	ext_client.free()
+	ext_client.queue_free()
 	if srv_pid > 0:
 		OS.kill(srv_pid)
 
 	# Cleanup
 	c1.disconnect_from_server()
 	server.stop_server()
+	client1_arena.queue_free()
+	client2_arena.queue_free()
+	server.queue_free()
 	await process_frame
-	client1_arena.free()
-	client2_arena.free()
-	server.free()
+	await process_frame
 
 	print("=== PHASE 1 TEST SUMMARY: %d PASSED, %d FAILED ===" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)

@@ -94,6 +94,13 @@ func stop_server() -> void:
 		_cleanup_session(sid)
 	active_sessions.clear()
 	rooms.clear()
+
+	if _peer and _is_running:
+		for pid in connected_peers.keys():
+			_peer.disconnect_peer(int(pid), true)
+		if _mp and _mp.has_multiplayer_peer():
+			_mp.poll()
+
 	connected_peers.clear()
 	_quick_match_queue.clear()
 
@@ -103,6 +110,13 @@ func stop_server() -> void:
 		_peer.close()
 		_peer = null
 	_is_running = false
+
+
+func _exit_tree() -> void:
+	stop_server()
+	if _mp:
+		_mp.clear()
+		_mp = null
 
 
 func is_running() -> bool:
@@ -270,11 +284,10 @@ func _on_peer_connected(peer_id: int) -> void:
 		"session_id": "",
 		"room_code": ""
 	}
-	send_to_peer(peer_id, {
-		"type": NetProtocol.S2C_WELCOME,
-		"peer_id": peer_id,
-		"assigned_name": default_name
-	}, true)
+	if _peer:
+		var pkt_peer := _peer.get_peer(peer_id)
+		if pkt_peer:
+			pkt_peer.set_timeout(1000, 2000, 3500)
 	client_connected.emit(peer_id)
 
 
