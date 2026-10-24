@@ -100,7 +100,7 @@ You can launch the authoritative headless server in either of two ways (no windo
 
 ### Ongoing Hosting Costs & Limitations
 - **Hosting Cost**: A single 1 vCPU / 1 GB RAM Linux VPS (~`$4–$6/month` on Hetzner/DigitalOcean/Lightsail) can comfortably host dozens of concurrent 5-player matches because headless Jolt 3D physics and 20 Hz compact snapshots (~400 bytes/packet) use minimal CPU and bandwidth (~8 KB/s per client).
-- **Single-Node Persistence**: Player accounts, statistics, match history, and leaderboards are stored in `user://server_persistence.json` on the dedicated server. If scaling horizontally across multiple server machines in the future, replace `ServerPersistence` with a shared PostgreSQL or Redis store.
+- **Single-Node Persistence & Atomic Backup Recovery**: Player accounts, SHA-256 token hashes, statistics, match history, and leaderboards are stored in `user://server_persistence.json` on the dedicated server. Writes are performed atomically via `.tmp` staging files with a `.bak` backup copy so power loss or mid-write crashes cannot corrupt player stats; if the primary JSON is corrupted, `ServerPersistence` logs a warning (`last_load_error`) and automatically restores from `.bak`. Because persistence is stored on the single server node, horizontal multi-node scaling would require a shared database (e.g., PostgreSQL/Redis).
 - **NAT / Carrier-Grade NAT**: Because clients connect outbound to the dedicated server's public UDP port (rather than peer-to-peer hosting), players behind mobile Carrier-Grade NAT (4G/5G) can play together without port forwarding on their phones.
 
 ---
@@ -117,7 +117,13 @@ You can launch the authoritative headless server in either of two ways (no windo
 - **5-Second Stealth Preparation Phase**: All living players are invincible during the 5-second countdown and opponents are hidden from each other.
 - **Simultaneous Laser Resolution (`0.0s`)**: The server freezes movement/aiming, takes an atomic snapshot of all living players and active obstacle AABBs, and evaluates all unobstructed attack segments simultaneously. Two players hitting each other eliminate each other simultaneously.
 - **Staged Shrinking Platform**: Shrinks in 4 stages (`100% -> 72% -> 45% -> 22%`) with a 4-second danger warning and falling outer tiles.
-- **Server Authority**: Clients only send movement and aim vectors (`C2S_PLAYER_INPUT`), which the server sanitizes and clamps. Clients never decide hits, fall eliminations, timers, or statistics (`ERR_FORBIDDEN_CLIENT_STATS`).
+- **Server Authority & Anti-Cheat**:
+  - Clients only send movement and aim vectors (`C2S_PLAYER_INPUT`), which the server sanitizes for `NaN`/`Inf`, clamps, and validates for strictly increasing sequence numbers (`seq > last_seq` and `seq >= 0`).
+  - Clients cannot spoof eliminations, laser attacks, positions, timers, shrink stages, or match outcomes (`ERR_FORBIDDEN_CLIENT_AUTHORITY` / `ERR_FORBIDDEN_CLIENT_STATS`).
+  - Unauthenticated room, matchmaking, or gameplay packets before `C2S_HELLO` are rejected (`ERR_UNAUTHENTICATED`).
+  - Account tokens are validated (`NetProtocol.is_valid_token`), stored only as SHA-256 hashes, and enforced across room/queue actions so clients cannot impersonate another player's username after connecting.
+  - Connecting a second client with the same account token evicts the stale duplicate connection (`ERR_DUPLICATE_IDENTITY`) so one player cannot occupy multiple slots.
+  - Repeated invalid room code guesses trigger a brute-force lockout (`MAX_FAILED_JOIN_ATTEMPTS = 5` -> `ERR_RATE_LIMITED`), and oversized (`> 4096` bytes -> `ERR_PACKET_TOO_LARGE`), malformed (`ERR_MALFORMED_PACKET`), or flooded packets (`ERR_RATE_LIMITED`) are rejected.
 
 ---
 
@@ -153,11 +159,14 @@ You can launch the authoritative headless server in either of two ways (no windo
 │   ├── mobile_controls.gd                # Dual-thumb virtual movement joystick and aiming pad
 │   └── ui_style_helper.gd                # Reusable chunky 3D-beveled StyleBox & button bounce helper
 ├── tests/
-│   ├── test_survival_arena.gd               # Local AI & UI test suite (61 checks)
-│   ├── test_phase1_multiplayer.gd           # Phase 1 authoritative server/client test suite (27 checks)
-│   ├── test_phase2_lobby_and_rooms.gd       # Phase 2 private rooms, matchmaking & AI fill suite (30 checks)
-│   ├── test_phase3_persistence_and_stats.gd # Phase 3 accounts, stats & leaderboard suite (12 checks)
-│   └── test_e2e_multiprocess_verification.gd # Multi-process E2E verification & auto-connect suite (32 checks)
+│   ├── stress_client_worker.gd                       # Standalone OS-process client worker for multi-process stress tests
+│   ├── test_survival_arena.gd                        # Local AI & UI test suite (61 checks)
+│   ├── test_phase1_multiplayer.gd                    # Phase 1 authoritative server/client test suite (27 checks)
+│   ├── test_phase2_lobby_and_rooms.gd                # Phase 2 private rooms, matchmaking & AI fill suite (30 checks)
+│   ├── test_phase3_persistence_and_stats.gd          # Phase 3 accounts, stats & leaderboard suite (12 checks)
+│   ├── test_e2e_multiprocess_verification.gd         # Multi-process E2E verification & auto-connect suite (32 checks)
+│   ├── test_comprehensive_security_and_reliability.gd # Security, authority, room/queue race & persistence suite (39 checks)
+│   └── test_multiprocess_stress_and_soak.gd          # Multi-process 5/10/16-client scaling & sustained soak suite (16 checks)
 └── ui/
     ├── hud.tscn
     ├── main_menu_overlay.tscn
@@ -168,7 +177,7 @@ You can launch the authoritative headless server in either of two ways (no windo
 
 ## 6. Running All Automated Test Suites
 
-Run all five automated test suites (`162 total assertions`) from PowerShell:
+Run all seven automated test suites (`217 total assertions`) from PowerShell:
 
 ```powershell
 # 1. Local Single-Player AI & UI Suite (61 assertions)
@@ -185,4 +194,10 @@ Run all five automated test suites (`162 total assertions`) from PowerShell:
 
 # 5. End-to-End Multi-Process Verification & Auto-Connect Stabilization Suite (32 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_e2e_multiprocess_verification.gd
+
+# 6. Comprehensive Multiplayer Reliability, Authority & Security Suite (39 assertions)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_comprehensive_security_and_reliability.gd
+
+# 7. Automated Multi-Process Stress & Sustained Soak Suite (16 assertions, ~135s soak)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_multiprocess_stress_and_soak.gd
 ```

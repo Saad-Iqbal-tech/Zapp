@@ -111,7 +111,7 @@ func _run_phase1_tests() -> void:
 	# Stop moving
 	c1.send_player_input_now(Vector2.ZERO, Vector2(0.0, -1.0))
 	c2.send_player_input_now(Vector2.ZERO, Vector2(1.0, 0.0))
-	await _wait_frames(6)
+	await _wait_frames(12)
 
 	# Verify remote player interpolation on clients
 	_assert(

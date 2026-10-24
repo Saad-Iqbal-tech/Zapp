@@ -13,6 +13,12 @@ const CLIENT_INPUT_RATE_HZ: float = 25.0
 const CHANNEL_RELIABLE: int = 0
 const CHANNEL_UNRELIABLE_STATE: int = 1
 
+const MAX_CLIENT_PACKET_BYTES: int = 4096
+const MAX_PACKETS_PER_SEC: int = 120
+const MAX_CONTROL_MSGS_PER_SEC: int = 30
+const MAX_FAILED_JOIN_ATTEMPTS: int = 5
+const JOIN_LOCKOUT_MS: int = 3000
+
 # Client -> Server message types
 const C2S_HELLO: String = "c2s_hello"
 const C2S_QUICK_JOIN: String = "c2s_quick_join" # Phase 1 direct match / Phase 2 public matchmaking
@@ -85,6 +91,20 @@ static func sanitize_player_name(raw_name: Variant, fallback: String = "PLAYER")
 
 static func is_valid_port(port: int) -> bool:
 	return port >= 1 and port <= 65535
+
+
+static func is_valid_token(raw_token: Variant) -> bool:
+	if typeof(raw_token) != TYPE_STRING:
+		return false
+	var t := (raw_token as String).strip_edges()
+	if t.length() < 4 or t.length() > 128:
+		return false
+	for i in range(t.length()):
+		var code := t[i].unicode_at(0)
+		# Reject control characters or non-printable bytes
+		if code < 33 or code > 126:
+			return false
+	return true
 
 
 static func is_valid_host_or_ip(raw_host: String) -> bool:

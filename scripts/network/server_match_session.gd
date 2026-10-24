@@ -49,6 +49,7 @@ var shrink_timer: float = 11.0
 var _snapshot_accum: float = 0.0
 var _snapshot_seq: int = 0
 var _is_resolving_simultaneous_batch: bool = false
+var _match_result_emitted: bool = false
 
 var _chars_root: Node3D
 var _ai_root: Node
@@ -92,6 +93,30 @@ func start_authoritative_match(participants: Array[Dictionary]) -> void:
 	slot_configs.clear()
 	peer_to_slot.clear()
 	last_input_seq.clear()
+	_match_result_emitted = false
+
+	# Deduplicate human participants by peer_id and username, and cap at MAX_PLAYERS_PER_MATCH (5)
+	var sanitized_participants: Array[Dictionary] = []
+	var seen_peers: Dictionary = {}
+	var seen_human_names: Dictionary = {}
+	for raw_p in participants:
+		if typeof(raw_p) != TYPE_DICTIONARY:
+			continue
+		if sanitized_participants.size() >= NetProtocol.MAX_PLAYERS_PER_MATCH:
+			break
+		var pid := int(raw_p.get("peer_id", 0))
+		var is_ai_flag := bool(raw_p.get("is_ai", pid <= 0))
+		var p_name := str(raw_p.get("name", "")).strip_edges()
+		if not is_ai_flag and pid > 0:
+			if seen_peers.has(pid):
+				continue
+			if not p_name.is_empty() and seen_human_names.has(p_name):
+				continue
+			seen_peers[pid] = true
+			if not p_name.is_empty():
+				seen_human_names[p_name] = true
+		sanitized_participants.append(raw_p)
+	participants = sanitized_participants
 
 	for child in _ai_root.get_children():
 		_ai_root.remove_child(child)
@@ -190,10 +215,12 @@ func apply_client_input(peer_id: int, raw_move: Variant, raw_aim: Variant, seq: 
 		return false
 	if current_phase != MatchPhase.PREPARATION:
 		return false
+	if seq < 0:
+		return false
 
-	var last_seq: int = int(last_input_seq.get(peer_id, -1))
-	if seq > 0 and seq < last_seq:
-		# Ignore stale out-of-order input packet
+	var last_seq: int = int(last_input_seq.get(peer_id, 0))
+	if seq > 0 and seq <= last_seq:
+		# Ignore duplicate or stale out-of-order input packet
 		return false
 	if seq > 0:
 		last_input_seq[peer_id] = seq
@@ -278,6 +305,8 @@ func _update_round_cycle(delta: float) -> void:
 
 
 func _trigger_simultaneous_resolution() -> void:
+	if current_phase != MatchPhase.PREPARATION:
+		return
 	current_phase = MatchPhase.RESOLUTION_FREEZE
 	phase_timer = resolution_freeze_duration
 
@@ -459,8 +488,9 @@ func _check_post_elimination_states() -> void:
 
 
 func _finish_match(is_draw: bool, winner: CharacterController) -> void:
-	if current_phase == MatchPhase.MATCH_OVER:
+	if current_phase == MatchPhase.MATCH_OVER or _match_result_emitted:
 		return
+	_match_result_emitted = true
 	current_phase = MatchPhase.MATCH_OVER
 	arena.stop_all_shrinking()
 

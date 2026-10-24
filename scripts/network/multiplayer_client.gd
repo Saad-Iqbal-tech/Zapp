@@ -29,6 +29,8 @@ enum ConnState {
 	CONNECTION_FAILED
 }
 
+static var _in_process_client_counter: int = 0
+
 var server_host: String = NetProtocol.DEFAULT_HOST
 var server_port: int = NetProtocol.DEFAULT_PORT
 var player_name: String = "STRIKER_01"
@@ -66,6 +68,7 @@ func _ready() -> void:
 	if account_token.is_empty():
 		account_token = _load_or_generate_account_token()
 	_mp = SceneMultiplayer.new()
+	_mp.server_relay = false
 	_mp.root_path = get_path()
 	_mp.connected_to_server.connect(_on_connected_to_server)
 	_mp.connection_failed.connect(_on_connection_failed)
@@ -81,6 +84,13 @@ func _exit_tree() -> void:
 
 
 func _load_or_generate_account_token() -> String:
+	_in_process_client_counter += 1
+	var crypto := Crypto.new()
+	# If multiple MultiplayerClient nodes are spawned in the same OS process (e.g. multi-client test harness),
+	# give subsequent instances a unique token unless explicitly overridden by the test.
+	if _in_process_client_counter > 1:
+		return crypto.generate_random_bytes(16).hex_encode()
+
 	var cfg_path := "user://client_account.cfg"
 	var cfg := ConfigFile.new()
 	if cfg.load(cfg_path) == OK:
@@ -94,10 +104,9 @@ func _load_or_generate_account_token() -> String:
 			server_host = saved_host.strip_edges()
 		if server_port == NetProtocol.DEFAULT_PORT and NetProtocol.is_valid_port(saved_port):
 			server_port = saved_port
-		if not saved_tok.is_empty():
+		if NetProtocol.is_valid_token(saved_tok):
 			return saved_tok
 
-	var crypto := Crypto.new()
 	var new_tok := crypto.generate_random_bytes(16).hex_encode()
 	cfg.set_value("account", "token", new_tok)
 	cfg.set_value("account", "username", player_name)
@@ -215,10 +224,6 @@ func connect_to_server(
 
 
 func disconnect_from_server() -> void:
-	if _peer and conn_state == ConnState.CONNECTED:
-		_peer.disconnect_peer(1, true)
-		if _mp and _mp.has_multiplayer_peer():
-			_mp.poll()
 	_reset_peer_state(ConnState.DISCONNECTED, true)
 
 
@@ -444,6 +449,8 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			_room_request_elapsed = 0.0
 			last_error_code = str(msg.get("code", "ERR"))
 			last_error_message = str(msg.get("message", "Server error"))
+			if latest_room_state.is_empty():
+				current_room_code = ""
 			server_error_received.emit(last_error_code, last_error_message)
 
 		NetProtocol.S2C_QUEUE_STATUS:
@@ -501,6 +508,7 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 
 		NetProtocol.S2C_MATCH_ENDED:
 			_in_active_match = false
+			current_session_id = ""
 			authoritative_match_ended.emit(msg)
 
 		NetProtocol.S2C_STATS_RESPONSE:
