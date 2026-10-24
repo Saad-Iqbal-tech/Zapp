@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/match_controller.gd" id="1_match"]
+
+[node name="MainArena" type="Node3D"]
+script = ExtResource("1_match")
+preparation_duration = 5.0
+resolution_freeze_duration = 0.85
+max_attack_range = 14.0
+shrink_stage_interval = 11.0
+shrink_warning_duration = 4.0
