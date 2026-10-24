@@ -18,6 +18,8 @@ const BOT_NAMES: Array[String] = ["VEX", "NOVA", "SOL", "NYX", "ZED"]
 
 var listen_port: int = NetProtocol.DEFAULT_PORT
 var bind_address: String = "0.0.0.0"
+var persistence_save_path: String = ServerPersistence.DEFAULT_SAVE_PATH
+var persistence: ServerPersistence
 
 var _peer: ENetMultiplayerPeer
 var _mp: SceneMultiplayer
@@ -53,6 +55,8 @@ var default_shrink_interval: float = 11.0
 
 func _ready() -> void:
 	_rng.randomize()
+	if persistence == null:
+		persistence = ServerPersistence.new(persistence_save_path)
 	_mp = SceneMultiplayer.new()
 	_mp.root_path = get_path()
 	_mp.peer_connected.connect(_on_peer_connected)
@@ -214,7 +218,14 @@ func _on_session_reliable_event_generated(session_id: String, event_msg: Diction
 
 
 func _on_session_match_ended(session_id: String, summary: Dictionary) -> void:
+	if persistence != null:
+		persistence.record_authoritative_match(summary)
+
 	if active_sessions.has(session_id):
+		var peer_ids: Array = active_sessions[session_id]["peer_ids"]
+		for pid in peer_ids:
+			_send_stats_to_peer(int(pid))
+
 		var r_code: String = str(active_sessions[session_id].get("room_code", ""))
 		if not r_code.is_empty() and rooms.has(r_code):
 			var room: Dictionary = rooms[r_code]
@@ -303,7 +314,10 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 
 	match msg_type:
 		NetProtocol.C2S_HELLO:
-			var clean_name := NetProtocol.sanitize_player_name(msg.get("name", ""), "P_%d" % peer_id)
+			var req_name := str(msg.get("name", "P_%d" % peer_id))
+			var raw_token := str(msg.get("token", "token_%d" % peer_id))
+			var profile := persistence.authenticate_or_register_player(req_name, raw_token, peer_id) if persistence else {"username": NetProtocol.sanitize_player_name(req_name, "P_%d" % peer_id)}
+			var clean_name := str(profile.get("username", "P_%d" % peer_id))
 			connected_peers[peer_id]["name"] = clean_name
 			# Also update name in active room if present
 			var r_code: String = str(connected_peers[peer_id].get("room_code", ""))
@@ -315,8 +329,10 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			send_to_peer(peer_id, {
 				"type": NetProtocol.S2C_WELCOME,
 				"peer_id": peer_id,
-				"assigned_name": clean_name
+				"assigned_name": clean_name,
+				"profile": profile
 			}, true)
+			_send_stats_to_peer(peer_id)
 
 		NetProtocol.C2S_PLAYER_INPUT:
 			var sid: String = str(connected_peers[peer_id].get("session_id", ""))
@@ -366,11 +382,34 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 		NetProtocol.C2S_REQUEST_REMATCH:
 			_handle_request_rematch(peer_id)
 
+		NetProtocol.C2S_GET_STATS:
+			_send_stats_to_peer(peer_id)
+
 		NetProtocol.C2S_PING:
 			send_to_peer(peer_id, {
 				"type": NetProtocol.S2C_PONG,
 				"client_time": msg.get("client_time", 0)
 			}, false)
+
+		_:
+			if msg_type.find("stat") != -1 or msg_type.find("win") != -1 or msg_type.find("score") != -1:
+				send_error_to_peer(
+					peer_id,
+					"ERR_FORBIDDEN_CLIENT_STATS",
+					"Statistics are server-authoritative and cannot be modified by clients"
+				)
+
+
+func _send_stats_to_peer(peer_id: int) -> void:
+	if not connected_peers.has(peer_id) or persistence == null:
+		return
+	var uname: String = str(connected_peers[peer_id].get("name", "P_%d" % peer_id))
+	send_to_peer(peer_id, {
+		"type": NetProtocol.S2C_STATS_RESPONSE,
+		"profile": persistence.get_public_profile(uname),
+		"leaderboard": persistence.get_leaderboard(20),
+		"global_match_history": persistence.global_match_history.slice(0, 15)
+	}, true)
 
 
 # ============================================================================

@@ -30,6 +30,7 @@ enum ConnState {
 var server_host: String = NetProtocol.DEFAULT_HOST
 var server_port: int = NetProtocol.DEFAULT_PORT
 var player_name: String = "STRIKER_01"
+var account_token: String = ""
 var connect_timeout_sec: float = 6.0
 
 var conn_state: ConnState = ConnState.DISCONNECTED
@@ -39,6 +40,8 @@ var local_slot_id: int = -1
 var current_session_id: String = ""
 var current_room_code: String = ""
 var latest_room_state: Dictionary = {}
+var latest_profile: Dictionary = {}
+var latest_stats_response: Dictionary = {}
 var in_matchmaking_queue: bool = false
 var queued_players_count: int = 0
 var last_error_code: String = ""
@@ -55,12 +58,33 @@ var _in_active_match: bool = false
 
 
 func _ready() -> void:
+	if account_token.is_empty():
+		account_token = _load_or_generate_account_token()
 	_mp = SceneMultiplayer.new()
 	_mp.root_path = get_path()
 	_mp.connected_to_server.connect(_on_connected_to_server)
 	_mp.connection_failed.connect(_on_connection_failed)
 	_mp.server_disconnected.connect(_on_server_disconnected)
 	_mp.peer_packet.connect(_on_peer_packet)
+
+
+func _load_or_generate_account_token() -> String:
+	var cfg_path := "user://client_account.cfg"
+	var cfg := ConfigFile.new()
+	if cfg.load(cfg_path) == OK:
+		var saved_tok := str(cfg.get_value("account", "token", ""))
+		var saved_name := str(cfg.get_value("account", "username", ""))
+		if not saved_name.is_empty():
+			player_name = NetProtocol.sanitize_player_name(saved_name, player_name)
+		if not saved_tok.is_empty():
+			return saved_tok
+
+	var crypto := Crypto.new()
+	var new_tok := crypto.generate_random_bytes(16).hex_encode()
+	cfg.set_value("account", "token", new_tok)
+	cfg.set_value("account", "username", player_name)
+	cfg.save(cfg_path)
+	return new_tok
 
 
 func connect_to_server(
@@ -189,6 +213,10 @@ func request_rematch() -> void:
 	send_message({"type": NetProtocol.C2S_REQUEST_REMATCH}, true)
 
 
+func request_stats() -> void:
+	send_message({"type": NetProtocol.C2S_GET_STATS}, true)
+
+
 func is_room_host() -> bool:
 	return not current_room_code.is_empty() and int(latest_room_state.get("host_peer_id", -1)) == local_peer_id
 
@@ -241,7 +269,8 @@ func _on_connected_to_server() -> void:
 	local_peer_id = _mp.get_unique_id()
 	send_message({
 		"type": NetProtocol.C2S_HELLO,
-		"name": player_name
+		"name": player_name,
+		"token": account_token
 	}, true)
 
 
@@ -270,6 +299,9 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			has_welcome = true
 			local_peer_id = int(msg.get("peer_id", local_peer_id))
 			var assigned_name := str(msg.get("assigned_name", player_name))
+			player_name = assigned_name
+			if msg.has("profile") and typeof(msg["profile"]) == TYPE_DICTIONARY:
+				latest_profile = msg["profile"]
 			connected_to_game_server.emit(local_peer_id, assigned_name)
 
 		NetProtocol.S2C_ERROR:
@@ -331,4 +363,7 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			authoritative_match_ended.emit(msg)
 
 		NetProtocol.S2C_STATS_RESPONSE:
+			latest_stats_response = msg.duplicate(true)
+			if msg.has("profile") and typeof(msg["profile"]) == TYPE_DICTIONARY:
+				latest_profile = msg["profile"]
 			stats_response_received.emit(msg)

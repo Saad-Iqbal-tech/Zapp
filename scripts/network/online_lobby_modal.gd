@@ -49,6 +49,13 @@ var ready_button: Button
 var start_match_button: Button
 var leave_room_button: Button
 
+# Phase 3: Stats, Match History & Leaderboard view
+var _stats_container: Control
+var _profile_summary_label: Label
+var _leaderboard_label: Label
+var _history_label: Label
+var _showing_stats: bool = false
+
 var _in_public_queue: bool = false
 var _local_ready: bool = true
 
@@ -81,6 +88,7 @@ func bind_client(mp_client: MultiplayerClient) -> void:
 	client.room_state_updated.connect(_on_room_state_updated)
 	client.room_closed.connect(_on_room_closed)
 	client.server_error_received.connect(_on_server_error_received)
+	client.stats_response_received.connect(_on_stats_response_received)
 	client.authoritative_match_started.connect(func(_msg: Dictionary):
 		visible = false
 	)
@@ -246,6 +254,17 @@ func _on_server_error_received(code: String, message: String) -> void:
 	_refresh_view_state()
 
 
+func toggle_stats_view() -> void:
+	_showing_stats = not _showing_stats
+	if _showing_stats and client and client.is_connected_to_server():
+		client.request_stats()
+	_refresh_view_state()
+
+
+func _on_stats_response_received(_stats_msg: Dictionary) -> void:
+	_refresh_view_state()
+
+
 func _refresh_view_state() -> void:
 	if not is_inside_tree():
 		return
@@ -267,11 +286,19 @@ func _refresh_view_state() -> void:
 
 	if connect_button:
 		connect_button.text = "DISCONNECT" if (connected or connecting) else "CONNECT"
+	if stats_button:
+		stats_button.text = "BACK TO LOBBY" if _showing_stats else "STATS & RANKS"
 
+	if _stats_container:
+		_stats_container.visible = _showing_stats
 	if _hub_container:
-		_hub_container.visible = not in_room
+		_hub_container.visible = (not in_room) and (not _showing_stats)
 	if _room_container:
-		_room_container.visible = in_room
+		_room_container.visible = in_room and (not _showing_stats)
+
+	if _showing_stats:
+		_populate_stats_and_leaderboard_ui()
+		return
 
 	if not in_room:
 		if public_queue_button:
@@ -410,7 +437,10 @@ func _build_ui() -> void:
 	stats_button.text = "STATS & RANKS"
 	stats_button.custom_minimum_size = Vector2(148.0, 38.0)
 	UIStyleHelper.apply_chunky_button_style(stats_button, UIStyleHelper.COLOR_PURPLE, UIStyleHelper.COLOR_PURPLE_BORDER, 14, 12, 4)
-	stats_button.pressed.connect(func(): leaderboard_requested.emit())
+	stats_button.pressed.connect(func():
+		toggle_stats_view()
+		leaderboard_requested.emit()
+	)
 	top_hbox.add_child(stats_button)
 
 	close_button = Button.new()
@@ -716,3 +746,109 @@ func _build_ui() -> void:
 	UIStyleHelper.apply_chunky_button_style(start_match_button, UIStyleHelper.COLOR_PLAY_GREEN, UIStyleHelper.COLOR_PLAY_BORDER, 18, 16, 6)
 	start_match_button.pressed.connect(_on_start_room_pressed)
 	act_hbox.add_child(start_match_button)
+
+	# --- PHASE 3: STATS, MATCH HISTORY & LEADERBOARD CONTAINER ---
+	_stats_container = VBoxContainer.new()
+	_stats_container.name = "StatsAndLeaderboardContainer"
+	_stats_container.visible = false
+	_stats_container.add_theme_constant_override("separation", 10)
+	_stats_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root_vbox.add_child(_stats_container)
+
+	var prof_panel := PanelContainer.new()
+	prof_panel.add_theme_stylebox_override(
+		"panel",
+		UIStyleHelper.create_card_style(Color(0.11, 0.19, 0.36, 0.95), Color(0.25, 0.88, 1.0), 14, 4, 14, 10)
+	)
+	_stats_container.add_child(prof_panel)
+
+	_profile_summary_label = Label.new()
+	_profile_summary_label.text = "Connect to the Dedicated Server to view your server-validated profile statistics."
+	_profile_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_profile_summary_label.add_theme_font_size_override("font_size", 15)
+	prof_panel.add_child(_profile_summary_label)
+
+	var split_hbox := HBoxContainer.new()
+	split_hbox.add_theme_constant_override("separation", 14)
+	split_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_stats_container.add_child(split_hbox)
+
+	var lb_card := PanelContainer.new()
+	lb_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lb_card.add_theme_stylebox_override(
+		"panel",
+		UIStyleHelper.create_card_style(Color(0.10, 0.17, 0.32, 0.95), UIStyleHelper.COLOR_GOLD, 14, 4, 14, 10)
+	)
+	split_hbox.add_child(lb_card)
+
+	_leaderboard_label = Label.new()
+	_leaderboard_label.text = "GLOBAL LEADERBOARD\n(No matches recorded yet)"
+	_leaderboard_label.add_theme_font_size_override("font_size", 13)
+	lb_card.add_child(_leaderboard_label)
+
+	var hist_card := PanelContainer.new()
+	hist_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hist_card.add_theme_stylebox_override(
+		"panel",
+		UIStyleHelper.create_card_style(Color(0.10, 0.17, 0.32, 0.95), UIStyleHelper.COLOR_PURPLE, 14, 4, 14, 10)
+	)
+	split_hbox.add_child(hist_card)
+
+	_history_label = Label.new()
+	_history_label.text = "RECENT MATCH HISTORY\n(No matches recorded yet)"
+	_history_label.add_theme_font_size_override("font_size", 13)
+	hist_card.add_child(_history_label)
+
+
+func _populate_stats_and_leaderboard_ui() -> void:
+	if not client or not client.is_connected_to_server():
+		if _profile_summary_label:
+			_profile_summary_label.text = "Connect to the Dedicated Server to view server-validated stats & leaderboards."
+		return
+
+	var prof := client.latest_profile
+	var uname := str(prof.get("username", client.player_name))
+	var wins := int(prof.get("wins", 0))
+	var losses := int(prof.get("losses", 0))
+	var draws := int(prof.get("draws", 0))
+	var mp := int(prof.get("matches_played", 0))
+	var elims := int(prof.get("eliminations", 0))
+
+	if _profile_summary_label:
+		_profile_summary_label.text = "PLAYER: %s   •   WINS: %d   •   LOSSES: %d   •   DRAWS: %d   •   MATCHES: %d   •   ELIMS: %d" % [
+			uname, wins, losses, draws, mp, elims
+		]
+
+	var lb: Array = client.latest_stats_response.get("leaderboard", [])
+	if _leaderboard_label:
+		var lines := PackedStringArray(["GLOBAL LEADERBOARD (TOP PLAYERS)"])
+		if lb.is_empty():
+			lines.append("No players ranked yet.")
+		else:
+			for i in range(mini(8, lb.size())):
+				var row: Dictionary = lb[i]
+				lines.append("#%d  %s  —  %dW / %dL  (%d Elims)" % [
+					int(row.get("rank", i + 1)),
+					str(row.get("username", "PLAYER")),
+					int(row.get("wins", 0)),
+					int(row.get("losses", 0)),
+					int(row.get("eliminations", 0))
+				])
+		_leaderboard_label.text = "\n".join(lines)
+
+	var hist: Array = prof.get("match_history", [])
+	if _history_label:
+		var h_lines := PackedStringArray(["YOUR RECENT MATCHES"])
+		if hist.is_empty():
+			h_lines.append("No matches completed yet.")
+		else:
+			for i in range(mini(7, hist.size())):
+				var h: Dictionary = hist[i]
+				h_lines.append("• [%s] Winner: %s  |  %d Elims  |  R%d (Stage %d)" % [
+					str(h.get("outcome", "MATCH")),
+					str(h.get("winner_name", "NONE")),
+					int(h.get("eliminations", 0)),
+					int(h.get("rounds", 1)),
+					int(h.get("final_stage", 1))
+				])
+		_history_label.text = "\n".join(h_lines)

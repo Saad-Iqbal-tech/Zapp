@@ -1,6 +1,8 @@
-# 5-Player Line-of-Sight Survival Arena
+# 5-Player Line-of-Sight Survival Arena (ZAPP ARENA)
 
-A 2.5D low-poly 3D mobile survival arena game built in **Godot 4.7** using GDScript. Five combatants (1 human player and 4 local AI opponents) battle on a shrinking floating square platform using strategic line-of-sight laser attacks that fire simultaneously at the end of each 5-second preparation countdown.
+A 2.5D low-poly 3D mobile survival arena game built in **Godot 4.7** using GDScript. Up to five combatants battle on a shrinking floating square platform using strategic line-of-sight laser attacks that fire simultaneously at the end of each 5-second preparation countdown.
+
+Supports both **Offline Local AI Mode** (`1 Human + 4 AI`) and **Authoritative Online Multiplayer** (`1–5 Humans + 0–4 Server AI`, Private Rooms with 5-character codes, Honest Public Matchmaking, and Persistent Server-Validated Statistics & Leaderboards).
 
 ---
 
@@ -10,114 +12,172 @@ A 2.5D low-poly 3D mobile survival arena game built in **Godot 4.7** using GDScr
 - **Godot Engine 4.x** (tested and verified with `Godot v4.7.2-stable_win64`).
 - Renderer configured for **Forward Mobile (`mobile`)** with **Jolt Physics 3D** and touchscreen emulation enabled for desktop testing.
 
-### Opening in the Godot Editor
-1. Launch Godot 4 (`C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64.exe`).
-2. Import or open `project.godot` in the workspace root (`c:\Users\danis\OneDrive\Documents\zapp`).
-3. Press **F5** (or click the **Play** button) to run the main scene (`res://scenes/main_arena.tscn`).
-
-### Running Directly from Command Line
+### Launching a Game Client
 ```powershell
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --path .
 ```
 
----
+### Launching the Dedicated Headless Server (Development Computer)
+You can launch the authoritative headless server in either of two ways (no window is rendered):
 
-## 2. Mobile Party Main Menu & Controls
+**Option A — Via `--server` CLI flag on the main project:**
+```powershell
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -- --server --port=7777 --bind=0.0.0.0
+```
 
-### Main Menu Lobby & Matchmaking
-- **Live 3D Hero Showcase Lobby**: Launches into a full-screen mobile party lobby featuring the 3D arena as a live background with subtle camera motion, the prominent **ZAPP ARENA** title banner, your 3D character (`YOU`, Cyan) in the center with expressive idle/wave animation and a soft ground shadow, a player profile card (`STRIKER_01`), and `WINS` / `TOKENS` counters.
-- **Play / Offline AI Matchmaking**: Tapping the dominant **PLAY!** button opens an animated matchmaking screen (`LOCAL AI ARENA MATCH • NO INTERNET REQUIRED`) that fills all 5 player slots (`YOU`, `VEX`, `NOVA`, `SOL`, `NYX`) with a **CANCEL** option before smoothly transitioning into the arena.
-- **Secondary Navigation**: Includes chunky rounded buttons with hover/press bounce animations for **SETTINGS**, **HOW TO PLAY**, and **EXIT**.
-
-### In-Game Touchscreen Controls
-The game is designed around dual-thumb mobile touchscreen controls:
-- **Bottom-Left Virtual Joystick (`MOVE`)**: Touch and drag anywhere on the bottom-left virtual joystick to move your character (`YOU`, Electric Cyan).
-- **Bottom-Right Aiming Control (`AIM`)**: Touch and drag on the bottom-right aiming pad to rotate your forward-facing torso attack line. Releasing your finger preserves your last aimed direction.
-- **Spectator Mode (`< PREV` / `NEXT >` / `MAIN MENU`)**: Automatically activates if you are eliminated while AI opponents remain alive, revealing all surviving players, zooming the camera onto the selected survivor (marked with a glowing cyan target ring), and letting you cycle targets via the on-screen buttons, tapping the left/right screen halves, or pressing `A`/`D` / `Left`/`Right`.
-- **Settings Panel (`SETTINGS` button / `Esc`)**: Opens a mobile party settings modal to adjust **Master Volume**, **Music Volume**, **Sound FX Volume**, **Camera Speed (Sensitivity)**, or **Mute All Audio**, plus a **Main Menu** button to return to the 3D lobby (or `lobby_scene_path` if configured).
-- **Winner / Draw Screen (`PLAY AGAIN` / `MAIN MENU`)**: Celebratory round-end screen with confetti particles, victory animations, token rewards, and quick replay or return-to-menu controls.
-
-### Desktop Testing Mode
-- `input_devices/pointing/emulate_touch_from_mouse=true` is enabled in `project.godot`, allowing you to click and drag the on-screen **MOVE** and **AIM** virtual pads directly with a mouse.
-- For single-cursor desktop convenience when testing simultaneous movement and aiming, `WASD` / Arrow keys can also deflect the left virtual joystick while your mouse drags the right aiming pad.
-
----
-
-## 3. Gameplay Rules & Arena Mechanics
-
-### 5-Second Stealth Preparation & Simultaneous Resolution
-1. **Spawn**: All 5 players (`YOU`, `VEX`, `NOVA`, `SOL`, `NYX`) spawn at separate balanced positions around the arena.
-2. **Preparation Phase (5.0s — Stealth & Invincible)**:
-   - All living players are **invincible** to laser attacks during these 5 seconds (indicated by the pulsing shield aura at your character's base).
-   - **Players are invisible from each other during the 5-second preparation phase**: only your own character and aiming line (or the currently spectated player's character and aiming line) are visible on screen while opponents and their aiming lines remain hidden.
-   - Aiming lines are blocked in real time by solid obstacles.
-3. **Simultaneous Resolution (Countdown = 0.0s — Laser Reveal & Fire)**:
-   - Movement and aiming freeze briefly (`0.85s`).
-   - **Everyone is revealed simultaneously** along with their high-intensity laser beams and a sci-fi laser discharge sound effect.
-   - A simultaneous snapshot of all living players and their unobstructed aiming segments is evaluated.
-   - Any living player whose circular hit area is intersected by another living player's unobstructed line is eliminated.
-   - Because all attacks are resolved from the same snapshot, two players aiming at each other without cover will **eliminate each other simultaneously**.
-   - If the final surviving players eliminate each other on the same cycle, the match ends in a **Draw**.
-
-### Audio & Soundtrack (`AudioManager`)
-- **Background Music**: Procedural 120 BPM synthwave/electronic arena loop that plays continuously during rounds.
-- **Laser Shooting SFX**: High-energy sci-fi laser beam discharge sound effect when the 5-second countdown fires.
-- **Platform / Background Dropping SFX**: Heavy descending sub-bass drop and cascading tile detachment sound when outer platform sections collapse into the abyss or when a player falls off.
-- **Tactical Cues**: Countdown ticks during the final 3 seconds (`3... 2... 1...`), shrink warning alarm pulses, and elimination shatter effects.
-
-### Staged Shrinking Platform
-The arena is generated from a `16x16` grid (`256` modular beveled floor tiles) with stage-grouped tactical cover obstacles. The safe playable width shrinks in 4 stages:
-- **Stage 1**: `100%` of original width (`24.0m x 24.0m`)
-- **Stage 2**: `72%` of original width (`17.28m x 17.28m`)
-- **Stage 3**: `45%` of original width (`10.80m x 10.80m`)
-- **Stage 4**: `22%` of original width (`5.28m x 5.28m`)
-
-Before each shrink (`4.0s` warning countdown), the danger boundary is highlighted and the outer tile ring pulses red and shakes before collapsing into the abyss and disabling its collision. Falling below the platform eliminates the character immediately. Arena shrinking stops automatically when the match ends.
-
----
-
-## 4. Project Structure & Architecture
-
-```text
-├── assets/
-│   └── low_poly_mesh_builder.gd   # Procedural faceted low-poly ArrayMesh builder (humanoids, tiles, obstacles)
-├── materials/
-│   ├── danger_boundary_material.tres
-│   ├── floor_tile_even.tres
-│   ├── floor_tile_odd.tres
-│   ├── floor_tile_warning.tres
-│   └── obstacle_material.tres
-├── scenes/
-│   ├── arena.tscn                 # Modular arena generator scene
-│   ├── character.tscn             # Reusable character scene
-│   └── main_arena.tscn            # Main match scene
-├── scripts/
-│   ├── ai_controller.gd           # AI target selection, aiming, line-of-sight dodging, and shrink evacuation
-│   ├── aim_line.gd                # Torso laser line visuals, obstacle raycast/AABB blocking, and hit math
-│   ├── arena_generator.gd         # 256-tile modular platform, 100/72/45/22% stage shrinking, falling tiles
-│   ├── audio_manager.gd           # Procedural 16-bit PCM synthwave BGM, laser shoot SFX, and platform drop SFX
-│   ├── camera_rig.gd              # Fixed ~75° high-angle camera rig with smooth follow & spectator tracking
-│   ├── character_controller.gd    # Movement physics, ALIVE/ELIMINATED/SPECTATING/WINNER states, fall detection
-│   ├── character_visuals.gd       # Articulated 3D low-poly humanoid model (5 color variants) & elimination FX
-│   ├── hud_controller.gd          # Mobile HUD, countdowns, settings modal, spectator bar, and winner/draw modal
-│   ├── main_menu_overlay.gd       # Full-screen 3D Main Menu lobby, How to Play modal, and AI Matchmaking screen
-│   ├── match_controller.gd        # Central round timer, simultaneous attack snapshot resolver, match lifecycle
-│   ├── mobile_controls.gd         # Touchscreen virtual movement joystick (left) and aiming pad (right)
-│   └── ui_style_helper.gd         # Reusable chunky 3D-beveled StyleBox builder & button hover/press bounce animations
-├── tests/
-│   └── test_survival_arena.gd     # Automated verification test suite (61 checks)
-└── ui/
-    ├── hud.tscn                   # HUD CanvasLayer scene
-    ├── main_menu_overlay.tscn     # Reusable Main Menu & Matchmaking UI scene
-    └── party_theme.tres           # Reusable mobile party Theme resource
+**Option B — Via the dedicated runner script:**
+```powershell
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://scripts/network/dedicated_server_runner.gd -- --port=7777 --bind=0.0.0.0
 ```
 
 ---
 
-## 5. Automated Testing
+## 2. Local & Multi-Device Multiplayer Testing Guide
 
-Run the automated test suite from the terminal to verify all core systems (character spawning, 75° camera angle, multi-touch virtual joystick & aim pad, obstacle line-of-sight blocking, mutual simultaneous elimination, spectator mode & target cycling, 100% -> 72% -> 45% -> 22% arena shrinking, fall detection, winner/draw screens, and replay reset):
+### How to Connect Two Local Game Clients to One Headless Server
+1. Start the headless server in Terminal 1:
+   ```powershell
+   & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -- --server --port=7777
+   ```
+2. Launch Client 1 in Terminal 2 and Client 2 in Terminal 3:
+   ```powershell
+   & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --path .
+   ```
+3. On both clients, tap **ONLINE LOBBY** on the bottom-right of the Main Menu:
+   - Leave **Server IP** as `127.0.0.1` and **Port** as `7777`, enter a player name, and tap **CONNECT**.
+   - **Public Matchmaking**: Tap **FIND PUBLIC MATCH** on both clients. Once 2 connected players are in the queue, the server launches the match automatically.
+   - **Private Room**: On Client 1, tap **CREATE PRIVATE ROOM** and note the 5-character **Room Code** (e.g. `K7X9P`). Optionally configure the number of Human slots (`1..5`) and AI Fill (`0..4` bots). On Client 2, enter the 5-character code, tap **JOIN ROOM**, and tap **READY UP!**. On Client 1 (Host), tap **START MATCH!**.
+
+### How to Test Across Two Different Devices (Android / LAN)
+1. Connect your development computer (running the headless server) and your Android phone(s) or second computer to the same Wi-Fi / LAN network.
+2. Find your development computer's local LAN IPv4 address (e.g., `ipconfig` on Windows -> `192.168.1.50`).
+3. Ensure Windows Defender Firewall allows inbound **UDP port `7777`** (see Section 3 below).
+4. Export and install the Android APK (`export_presets.cfg` includes the Android preset with `INTERNET` and `ACCESS_NETWORK_STATE` permissions pre-enabled; requires Godot 4.7.2 export templates installed in the Godot Editor).
+5. In the game's **ONLINE LOBBY**, replace `127.0.0.1` with your computer's LAN IP (`192.168.1.50`), keep Port `7777`, and tap **CONNECT**.
+
+---
+
+## 3. Network Ports, Firewall Rules & Internet Deployment
+
+### Required Network Ports & Firewall Rules
+- **Transport**: Godot `ENetMultiplayerPeer` over **UDP** (reliable channel `0` for lobby/match events, unreliable-ordered channel `1` for 20 Hz state snapshots and 25 Hz player inputs).
+- **Default Port**: **`UDP 7777`** (inbound and outbound). TCP is not used by ENet.
+- **Windows Firewall Rule (PowerShell as Administrator)**:
+  ```powershell
+  New-NetFirewallRule -DisplayName "Zapp Arena Server UDP 7777" -Direction Inbound -Protocol UDP -LocalPort 7777 -Action Allow
+  ```
+- **Linux (`ufw`) Firewall Rule**:
+  ```bash
+  sudo ufw allow 7777/udp
+  ```
+
+### Deploying the Dedicated Server to a Publicly Reachable Machine (Production)
+1. **Provision a Linux VPS** (e.g., Ubuntu 22.04/24.04 on DigitalOcean, Hetzner, Linode, AWS Lightsail, or GCP e2-micro) with a static public IPv4 address.
+2. **Export or Copy the Server**:
+   - Either export the `Linux Dedicated Server` preset (`build/server/zapp_arena_server.x86_64` + `.pck`) or upload the project folder with the official Linux headless Godot 4.7.2 binary.
+3. **Run Under `systemd`** so it restarts automatically on crash or reboot:
+   ```ini
+   [Unit]
+   Description=Zapp Arena Authoritative Dedicated Server
+   After=network.target
+
+   [Service]
+   Type=simple
+   User=ubuntu
+   WorkingDirectory=/opt/zapp-arena
+   ExecStart=/opt/zapp-arena/Godot_v4.7.2-stable_linux.x86_64 --headless --path /opt/zapp-arena -- --server --port=7777 --bind=0.0.0.0
+   Restart=on-failure
+   RestartSec=3
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+4. **Settings to Change Between Local Testing and Production**:
+   - **Client Default Server Host**: Change `NetProtocol.DEFAULT_HOST` in `scripts/network/net_protocol.gd` (or enter in the Online Lobby UI) from `"127.0.0.1"` to your server's public IPv4 address or DNS hostname.
+   - **Server Bind Address**: Ensure `--bind=0.0.0.0` is used on the server (never `127.0.0.1` in production, which would only accept loopback connections).
+   - **Matchmaking Minimum Humans**: `quick_match_required_players` in `DedicatedServer` defaults to `2` for easy two-player testing; for 5-player public lobbies, set `quick_match_required_players = 5` (or enable `quick_match_fill_with_ai = true`).
+
+### Ongoing Hosting Costs & Limitations
+- **Hosting Cost**: A single 1 vCPU / 1 GB RAM Linux VPS (~`$4–$6/month` on Hetzner/DigitalOcean/Lightsail) can comfortably host dozens of concurrent 5-player matches because headless Jolt 3D physics and 20 Hz compact snapshots (~400 bytes/packet) use minimal CPU and bandwidth (~8 KB/s per client).
+- **Single-Node Persistence**: Player accounts, statistics, match history, and leaderboards are stored in `user://server_persistence.json` on the dedicated server. If scaling horizontally across multiple server machines in the future, replace `ServerPersistence` with a shared PostgreSQL or Redis store.
+- **NAT / Carrier-Grade NAT**: Because clients connect outbound to the dedicated server's public UDP port (rather than peer-to-peer hosting), players behind mobile Carrier-Grade NAT (4G/5G) can play together without port forwarding on their phones.
+
+---
+
+## 4. Controls & Gameplay Rules
+
+### Controls (Mobile Touchscreen First + Desktop Testing Mode)
+- **Bottom-Left Virtual Joystick (`MOVE`)**: Touch and drag to move your character.
+- **Bottom-Right Aiming Control (`AIM`)**: Touch and drag to rotate your forward-facing torso attack line. Releasing preserves your last aimed direction.
+- **Spectator Mode (`< PREV` / `NEXT >` / `MAIN MENU`)**: Automatically activates if you are eliminated while opponents remain alive, revealing all surviving players and following the selected survivor.
+- **Settings Panel (`SETTINGS` / `Esc`)**: Adjust **Master Volume**, **Music Volume**, **Sound FX Volume**, **Camera Speed**, or **Mute All Audio**.
+
+### Authoritative Gameplay & Anti-Cheat Architecture
+- **5-Second Stealth Preparation Phase**: All living players are invincible during the 5-second countdown and opponents are hidden from each other.
+- **Simultaneous Laser Resolution (`0.0s`)**: The server freezes movement/aiming, takes an atomic snapshot of all living players and active obstacle AABBs, and evaluates all unobstructed attack segments simultaneously. Two players hitting each other eliminate each other simultaneously.
+- **Staged Shrinking Platform**: Shrinks in 4 stages (`100% -> 72% -> 45% -> 22%`) with a 4-second danger warning and falling outer tiles.
+- **Server Authority**: Clients only send movement and aim vectors (`C2S_PLAYER_INPUT`), which the server sanitizes and clamps. Clients never decide hits, fall eliminations, timers, or statistics (`ERR_FORBIDDEN_CLIENT_STATS`).
+
+---
+
+## 5. Project Structure
+
+```text
+├── assets/
+│   └── low_poly_mesh_builder.gd          # Procedural low-poly 3D mesh builder
+├── materials/                            # Arena tile, obstacle, and boundary materials
+├── scenes/
+│   ├── arena.tscn                        # Modular arena generator scene
+│   ├── character.tscn                    # Reusable character scene
+│   └── main_arena.tscn                   # Main match & lobby scene
+├── scripts/
+│   ├── network/
+│   │   ├── dedicated_server.gd           # Authoritative ENet server (sessions, rooms, matchmaking, stats)
+│   │   ├── dedicated_server_runner.gd    # Headless server SceneTree runner script
+│   │   ├── multiplayer_client.gd         # Client ENet networking, input sender, and state receiver
+│   │   ├── net_protocol.gd               # Shared packet types, constants, and input sanitizers
+│   │   ├── online_lobby_modal.gd         # Online Hub, Private Room Lobby, and Stats/Leaderboard UI
+│   │   ├── server_match_session.gd       # Authoritative server-side 5-player match simulation
+│   │   └── server_persistence.gd         # Token-authenticated accounts, match history & leaderboard store
+│   ├── ai_controller.gd                  # Fair line-of-sight AI controller (no wall-vision or stealth cheating)
+│   ├── aim_line.gd                       # Torso laser visuals, obstacle blocking, and hit math
+│   ├── arena_generator.gd                # 256-tile modular platform & 100/72/45/22% staged shrinking
+│   ├── audio_manager.gd                  # Procedural synthwave BGM and laser/drop SFX
+│   ├── camera_rig.gd                     # 75° arena camera, spectator zoom, and 3D lobby showcase camera
+│   ├── character_controller.gd           # Movement physics, client interpolation, and character states
+│   ├── character_visuals.gd              # Articulated 3D humanoid model & elimination FX
+│   ├── hud_controller.gd                 # In-game HUD, settings modal, spectator bar, and winner screen
+│   ├── main_menu_overlay.gd              # 3D Main Menu lobby, How to Play, and Online Lobby integration
+│   ├── match_controller.gd               # Central coordinator for Local AI mode and Online Client mode
+│   ├── mobile_controls.gd                # Dual-thumb virtual movement joystick and aiming pad
+│   └── ui_style_helper.gd                # Reusable chunky 3D-beveled StyleBox & button bounce helper
+├── tests/
+│   ├── test_survival_arena.gd            # Local AI & UI test suite (61 checks)
+│   ├── test_phase1_multiplayer.gd        # Phase 1 authoritative server/client test suite (27 checks)
+│   ├── test_phase2_lobby_and_rooms.gd    # Phase 2 private rooms, matchmaking & AI fill suite (30 checks)
+│   └── test_phase3_persistence_and_stats.gd # Phase 3 accounts, stats & leaderboard suite (12 checks)
+└── ui/
+    ├── hud.tscn
+    ├── main_menu_overlay.tscn
+    └── party_theme.tres
+```
+
+---
+
+## 6. Running All Automated Test Suites
+
+Run all four automated test suites (`130 total assertions`) from PowerShell:
 
 ```powershell
+# 1. Local Single-Player AI & UI Suite (61 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_survival_arena.gd
+
+# 2. Phase 1: Authoritative Dedicated Server & Multi-Client Sync (27 assertions)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase1_multiplayer.gd
+
+# 3. Phase 2: Private Rooms, Public Matchmaking, Host Controls & AI Fill (30 assertions)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase2_lobby_and_rooms.gd
+
+# 4. Phase 3: Persistent Accounts, Server-Validated Stats & Leaderboards (12 assertions)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase3_persistence_and_stats.gd
 ```
