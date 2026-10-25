@@ -7,7 +7,8 @@ extends Node
 ## - Heavy descending rumble & cascading tile drop sound when outer platform sections drop
 ## - Tactical countdown ticks and elimination impact effects
 
-const SAMPLE_RATE: int = 22050
+const SAMPLE_RATE: int = 44100
+const PADDING_SAMPLES: int = 512
 
 var master_volume: float = 1.00
 var music_volume: float = 0.80
@@ -177,7 +178,9 @@ func _build_bgm_stream() -> AudioStreamWAV:
 	var duration := 8.0
 	var total_samples := int(duration * SAMPLE_RATE)
 	var pcm := PackedByteArray()
-	pcm.resize(total_samples * 2)
+	# Allocate extra lookahead padding frames so Godot's cubic resampler / audio thread
+	# never overreads past the end of the buffer into unmapped memory pages on Android
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
 
 	# Bassline MIDI-like frequencies (D minor progression: Dm | Bb | Gm | A)
 	var bass_freqs := PackedFloat32Array([
@@ -246,6 +249,13 @@ func _build_bgm_stream() -> AudioStreamWAV:
 		var sample_i16 := int(mix * 32767.0)
 		pcm.encode_s16(i * 2, sample_i16)
 
+	# Copy initial samples into the lookahead padding buffer so cubic interpolation across the loop is click-free and safe
+	for p in range(PADDING_SAMPLES):
+		var src_idx := (p % total_samples) * 2
+		var dst_idx := (total_samples + p) * 2
+		pcm[dst_idx] = pcm[src_idx]
+		pcm[dst_idx + 1] = pcm[src_idx + 1]
+
 	var wav := AudioStreamWAV.new()
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = SAMPLE_RATE
@@ -262,7 +272,7 @@ func _build_laser_stream() -> AudioStreamWAV:
 	var duration := 0.58
 	var total_samples := int(duration * SAMPLE_RATE)
 	var pcm := PackedByteArray()
-	pcm.resize(total_samples * 2)
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
 
 	var phase := 0.0
 	var sub_phase := 0.0
@@ -296,6 +306,9 @@ func _build_laser_stream() -> AudioStreamWAV:
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = SAMPLE_RATE
 	wav.stereo = false
+	wav.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	wav.loop_begin = 0
+	wav.loop_end = total_samples
 	wav.data = pcm
 	return wav
 
@@ -305,7 +318,7 @@ func _build_platform_drop_stream() -> AudioStreamWAV:
 	var duration := 1.25
 	var total_samples := int(duration * SAMPLE_RATE)
 	var pcm := PackedByteArray()
-	pcm.resize(total_samples * 2)
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
 
 	var drop_phase := 0.0
 	var rumble_phase := 0.0
@@ -344,6 +357,9 @@ func _build_platform_drop_stream() -> AudioStreamWAV:
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = SAMPLE_RATE
 	wav.stereo = false
+	wav.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	wav.loop_begin = 0
+	wav.loop_end = total_samples
 	wav.data = pcm
 	return wav
 
@@ -353,7 +369,7 @@ func _build_warning_stream() -> AudioStreamWAV:
 	var duration := 0.42
 	var total_samples := int(duration * SAMPLE_RATE)
 	var pcm := PackedByteArray()
-	pcm.resize(total_samples * 2)
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
 
 	var phase := 0.0
 	for i in range(total_samples):
@@ -370,6 +386,9 @@ func _build_warning_stream() -> AudioStreamWAV:
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = SAMPLE_RATE
 	wav.stereo = false
+	wav.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	wav.loop_begin = 0
+	wav.loop_end = total_samples
 	wav.data = pcm
 	return wav
 
@@ -379,7 +398,7 @@ func _build_tick_stream() -> AudioStreamWAV:
 	var duration := 0.09
 	var total_samples := int(duration * SAMPLE_RATE)
 	var pcm := PackedByteArray()
-	pcm.resize(total_samples * 2)
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
 
 	for i in range(total_samples):
 		var t := float(i) / float(SAMPLE_RATE)
@@ -391,6 +410,9 @@ func _build_tick_stream() -> AudioStreamWAV:
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = SAMPLE_RATE
 	wav.stereo = false
+	wav.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	wav.loop_begin = 0
+	wav.loop_end = total_samples
 	wav.data = pcm
 	return wav
 
@@ -400,7 +422,7 @@ func _build_elimination_stream() -> AudioStreamWAV:
 	var duration := 0.48
 	var total_samples := int(duration * SAMPLE_RATE)
 	var pcm := PackedByteArray()
-	pcm.resize(total_samples * 2)
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
 
 	var noise_seed := 7777
 	var lp := 0.0
@@ -418,5 +440,8 @@ func _build_elimination_stream() -> AudioStreamWAV:
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = SAMPLE_RATE
 	wav.stereo = false
+	wav.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	wav.loop_begin = 0
+	wav.loop_end = total_samples
 	wav.data = pcm
 	return wav
