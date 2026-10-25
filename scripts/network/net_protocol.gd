@@ -4,8 +4,8 @@ extends RefCounted
 ## Used by both DedicatedServer and MultiplayerClient.
 
 const DEFAULT_PORT: int = 7777
-const DEFAULT_HOST: String = "127.0.0.1"
-const DEFAULT_WS_URL: String = "ws://127.0.0.1:7777"
+const DEFAULT_HOST: String = "wss://zapp-8hzx.onrender.com"
+const DEFAULT_WS_URL: String = "wss://zapp-8hzx.onrender.com"
 const MAX_CLIENTS: int = 64
 const MAX_PLAYERS_PER_MATCH: int = 5
 const SERVER_TICK_RATE_HZ: float = 20.0

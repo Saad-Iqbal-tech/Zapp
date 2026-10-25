@@ -706,7 +706,7 @@ func _build_ui() -> void:
 	srv_hbox.add_child(connect_button)
 
 	feedback_banner = Label.new()
-	feedback_banner.text = "Configure server address and tap CONNECT to play online."
+	feedback_banner.text = "Tap CREATE PRIVATE ROOM or FIND PUBLIC MATCH to jump into the action!"
 	feedback_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	feedback_banner.add_theme_font_size_override("font_size", 14)
 	feedback_banner.add_theme_color_override("font_color", Color(0.45, 0.96, 1.0))

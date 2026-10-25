@@ -115,8 +115,12 @@ func _load_or_generate_account_token() -> String:
 		var saved_port := int(cfg.get_value("network", "server_port", 0))
 		if not saved_name.is_empty():
 			player_name = NetProtocol.sanitize_player_name(saved_name, player_name)
-		if server_host == NetProtocol.DEFAULT_HOST and NetProtocol.is_valid_host_or_ip(saved_host):
+		if not saved_host.is_empty() and saved_host != "127.0.0.1" and NetProtocol.is_valid_host_or_url(saved_host):
 			server_host = saved_host.strip_edges()
+			server_url = NetProtocol.normalize_ws_url(server_host, server_port)
+		else:
+			server_host = NetProtocol.DEFAULT_WS_URL
+			server_url = NetProtocol.DEFAULT_WS_URL
 		if server_port == NetProtocol.DEFAULT_PORT and NetProtocol.is_valid_port(saved_port):
 			server_port = saved_port
 		if NetProtocol.is_valid_token(saved_tok):
