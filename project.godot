@@ -49,10 +49,12 @@ pointing/emulate_touch_from_mouse=true
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/msaa_3d=2
 
 [zapp_ads]
 
+enabled=true
 interstitial_ad_unit_id="ca-app-pub-2206945025056752/7728096486"
 test_interstitial_ad_unit_id="ca-app-pub-3940256099942544/1033173712"
 use_test_ads=true

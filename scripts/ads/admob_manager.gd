@@ -26,10 +26,13 @@ const GOOGLE_TEST_INTERSTITIAL_AD_UNIT_ID: String = "ca-app-pub-3940256099942544
 const SETTING_ANDROID_ENABLED: String = "admob/general/android/enabled"
 const SETTING_ANDROID_APP_ID: String = "admob/general/android/app_id"
 # Custom settings live outside "admob/*" because the plugin's editor code prunes unknown admob/* keys.
+const SETTING_ADS_ENABLED: String = "zapp_ads/enabled"
 const SETTING_INTERSTITIAL_UNIT_ID: String = "zapp_ads/interstitial_ad_unit_id"
 const SETTING_TEST_INTERSTITIAL_UNIT_ID: String = "zapp_ads/test_interstitial_ad_unit_id"
 const SETTING_USE_TEST_ADS: String = "zapp_ads/use_test_ads"
 
+## Master toggle for ads (set false in project.godot or via setting to bypass native ad SDK for diagnostics).
+@export var ads_enabled: bool = true
 ## Always true during development/debug builds so live ads are never requested while testing.
 @export var use_test_ads: bool = true
 ## Minimum seconds between two interstitials (frequency cap so players are not spammed).
@@ -59,6 +62,8 @@ var _simulate_auto_dismiss_sec: float = 0.05
 
 
 func _ready() -> void:
+	if ProjectSettings.has_setting(SETTING_ADS_ENABLED):
+		ads_enabled = bool(ProjectSettings.get_setting(SETTING_ADS_ENABLED, true))
 	if ProjectSettings.has_setting(SETTING_USE_TEST_ADS):
 		use_test_ads = bool(ProjectSettings.get_setting(SETTING_USE_TEST_ADS, true))
 	# Force test ads in debug/development builds so live ads are never requested in development
@@ -86,6 +91,8 @@ func get_active_interstitial_unit_id() -> String:
 
 
 func has_native_android_admob() -> bool:
+	if not ads_enabled:
+		return false
 	return OS.get_name() == "Android" and Engine.has_singleton("PoingGodotAdMob") and Engine.has_singleton("PoingGodotAdMobInterstitialAd")
 
 
@@ -113,7 +120,7 @@ func initialize_admob() -> void:
 		return
 
 	if not has_native_android_admob():
-		# Desktop or non-plugin build: keep game working normally without requiring Android singletons
+		# Desktop, disabled, or non-plugin build: keep game working normally without requiring Android singletons
 		is_initialized = true
 		admob_initialized.emit(false)
 		return
@@ -128,19 +135,21 @@ func initialize_admob() -> void:
 	_content_callback.on_ad_failed_to_show_full_screen_content = _on_native_interstitial_failed_to_show
 
 	var request_config := RequestConfiguration.new()
+	request_config.test_device_ids = []
 	MobileAds.set_request_configuration(request_config)
 
 	var init_listener := OnInitializationCompleteListener.new()
 	init_listener.on_initialization_complete = func(_status: InitializationStatus) -> void:
 		is_initialized = true
 		admob_initialized.emit(true)
-		preload_interstitial()
+		# Defer preload to the next engine frame so JNI signal dispatch can cleanly exit first
+		call_deferred("preload_interstitial")
 
 	MobileAds.initialize(init_listener)
 
 
 func preload_interstitial() -> void:
-	if is_loading_interstitial or is_interstitial_loaded():
+	if not ads_enabled or is_loading_interstitial or is_interstitial_loaded():
 		return
 
 	var unit_id := get_active_interstitial_unit_id()
@@ -172,8 +181,13 @@ func preload_interstitial() -> void:
 		_load_callback.on_ad_loaded = _on_native_interstitial_loaded
 		_load_callback.on_ad_failed_to_load = _on_native_interstitial_failed_to_load
 
+	var req := AdRequest.new()
+	req.keywords = []
+	req.mediation_extras = []
+	req.extras = {}
+
 	_interstitial_loader = InterstitialAdLoader.new()
-	_interstitial_loader.load(unit_id, AdRequest.new(), _load_callback)
+	_interstitial_loader.load(unit_id, req, _load_callback)
 
 
 ## Returns true ONLY when the game is at the post-match result break (MATCH_OVER)
