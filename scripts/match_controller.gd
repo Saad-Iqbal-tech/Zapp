@@ -134,10 +134,10 @@ func _check_and_run_dedicated_server_cli() -> bool:
 	var port := NetProtocol.DEFAULT_PORT
 	var bind_ip := "0.0.0.0"
 
-	# Check environment variable PORT (standard on Render and container platforms)
-	var env_port := OS.get_environment("PORT").strip_edges()
-	if not env_port.is_empty() and env_port.is_valid_int():
-		port = int(env_port)
+	# If GODOT_PORT env var is set, use it for internal container port binding
+	var env_godot_port := OS.get_environment("GODOT_PORT").strip_edges()
+	if not env_godot_port.is_empty() and env_godot_port.is_valid_int():
+		port = int(env_godot_port)
 
 	for arg in all_args:
 		if arg == "--server" or arg == "--dedicated-server":

@@ -61,5 +61,8 @@ EOF
 # Start Nginx in background
 nginx
 
+# Set GODOT_PORT for internal container binding
+export GODOT_PORT="${INTERNAL_PORT}"
+
 # Start Godot dedicated server on internal port 7777 (bound to 127.0.0.1)
 exec /opt/godot/godot --headless --path /app -s res://scripts/network/dedicated_server_runner.gd -- --port="${INTERNAL_PORT}" --bind="127.0.0.1"
