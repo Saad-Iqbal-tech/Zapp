@@ -36,6 +36,9 @@ RUN wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERS
 WORKDIR /app
 COPY . /app
 
+# Ensure global script class cache is initialized
+RUN /opt/godot/godot --headless --editor --quit --path /app || true
+
 # Ensure entrypoint script is executable
 RUN chmod +x /app/entrypoint.sh
 
