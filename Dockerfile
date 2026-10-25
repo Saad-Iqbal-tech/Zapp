@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PORT=10000 \
     BIND_IP=0.0.0.0
 
-# Install runtime dependencies required for Godot 4 headless execution
+# Install runtime dependencies required for Godot 4 headless execution and reverse proxy
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     wget \
@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfontconfig1 \
     libgl1 \
     libasound2 \
+    nginx-light \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up Godot installation directory

@@ -11,6 +11,7 @@ services:
     region: oregon
     dockerfilePath: Dockerfile
     autoDeploy: true
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: 10000
