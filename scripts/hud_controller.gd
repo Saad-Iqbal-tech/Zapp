@@ -23,6 +23,7 @@ var main_menu: MainMenuOverlay
 
 var _root_control: Control
 var _in_game_hud_root: Control
+var _top_card: PanelContainer
 var _countdown_label: Label
 var _countdown_bar: ProgressBar
 var _status_sub_label: Label
@@ -75,6 +76,47 @@ var _confetti_items: Array[Dictionary] = []
 func _ready() -> void:
 	layer = 10
 	_build_ui()
+	if get_viewport():
+		get_viewport().size_changed.connect(apply_safe_area_layout)
+	apply_safe_area_layout()
+
+
+func set_simulated_safe_insets(insets: Vector4) -> void:
+	if mobile_controls:
+		mobile_controls.simulated_safe_insets = insets
+		mobile_controls.queue_redraw()
+	apply_safe_area_layout()
+
+
+func apply_safe_area_layout() -> void:
+	var insets := {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
+	if mobile_controls:
+		insets = mobile_controls.get_safe_insets()
+	var safe_left := float(insets.get("left", 0.0))
+	var safe_top := float(insets.get("top", 0.0))
+	var safe_right := float(insets.get("right", 0.0))
+	var safe_bottom := float(insets.get("bottom", 0.0))
+
+	if _top_card:
+		var top_y := maxf(12.0, 6.0 + safe_top)
+		_top_card.offset_top = top_y
+		_top_card.offset_bottom = top_y + 86.0
+
+	if _menu_button:
+		var right_pad := maxf(24.0, 16.0 + safe_right)
+		var top_pad := maxf(18.0, 10.0 + safe_top)
+		_menu_button.offset_right = -right_pad
+		_menu_button.offset_left = -(right_pad + 128.0)
+		_menu_button.offset_top = top_pad
+		_menu_button.offset_bottom = top_pad + 48.0
+
+	if _spectator_panel:
+		var bot_pad := maxf(22.0, 12.0 + safe_bottom)
+		_spectator_panel.offset_bottom = -bot_pad
+		_spectator_panel.offset_top = -(bot_pad + 102.0)
+
+	if main_menu:
+		main_menu.apply_safe_area_margins(safe_left, safe_top, safe_right, safe_bottom)
 
 
 func show_main_menu_lobby() -> void:
@@ -346,6 +388,7 @@ func _build_ui() -> void:
 
 	# Top-Center Party Countdown & Alive Card
 	var top_card := PanelContainer.new()
+	_top_card = top_card
 	top_card.add_theme_stylebox_override(
 		"panel",
 		UIStyleHelper.create_card_style(Color(0.08, 0.14, 0.28, 0.92), Color(0.25, 0.84, 1.0), 22, 6, 18, 8)

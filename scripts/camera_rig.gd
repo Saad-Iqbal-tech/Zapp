@@ -31,12 +31,23 @@ func _ready() -> void:
 	_current_pitch = -look_down_angle_deg
 	camera = Camera3D.new()
 	camera.name = "ArenaCamera3D"
+	camera.keep_aspect = Camera3D.KEEP_HEIGHT
 	camera.fov = fov_degrees
 	camera.current = true
 	add_child(camera)
 
 	_build_spectator_marker()
 	_apply_camera_transform(Vector3.ZERO)
+
+
+func get_effective_horizontal_fov_deg(viewport_size: Vector2 = Vector2.ZERO) -> float:
+	var vp := viewport_size
+	if vp.x <= 1.0 or vp.y <= 1.0:
+		vp = get_viewport().get_visible_rect().size if is_inside_tree() and get_viewport() else Vector2(1280.0, 720.0)
+	var aspect := maxf(0.1, vp.x / maxf(1.0, vp.y))
+	var v_fov_rad := deg_to_rad(camera.fov if camera else fov_degrees)
+	var h_fov_rad := 2.0 * atan(tan(v_fov_rad * 0.5) * aspect)
+	return rad_to_deg(h_fov_rad)
 
 
 func set_lobby_mode(active: bool, hero_target: Node3D = null, snap_immediately: bool = false) -> void:

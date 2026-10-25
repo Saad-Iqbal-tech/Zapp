@@ -25,13 +25,46 @@ var _aim_touch_index: int = -1
 
 var _left_knob_offset: Vector2 = Vector2.ZERO
 var _right_knob_offset: Vector2 = Vector2.ZERO
+## Optional simulated safe-area insets (left, top, right, bottom) for desktop/automated testing of phone notches.
+var simulated_safe_insets: Vector4 = Vector4.ZERO
 
 
 func _ready() -> void:
+	if OS.has_feature("android") or OS.has_feature("mobile"):
+		desktop_test_keyboard_assist = false
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	resized.connect(queue_redraw)
 	queue_redraw()
+
+
+func get_safe_insets() -> Dictionary:
+	var vp := get_viewport_rect().size
+	if vp.x < 10.0 or vp.y < 10.0:
+		vp = Vector2(1280.0, 720.0)
+
+	var left_in := maxf(0.0, simulated_safe_insets.x)
+	var top_in := maxf(0.0, simulated_safe_insets.y)
+	var right_in := maxf(0.0, simulated_safe_insets.z)
+	var bottom_in := maxf(0.0, simulated_safe_insets.w)
+
+	if OS.has_feature("android") or OS.has_feature("mobile"):
+		var win_size := Vector2(DisplayServer.window_get_size())
+		var safe_rect := Rect2(DisplayServer.get_display_safe_area())
+		if win_size.x > 10.0 and win_size.y > 10.0 and safe_rect.size.x > 10.0 and safe_rect.size.y > 10.0:
+			var scale_x := vp.x / win_size.x
+			var scale_y := vp.y / win_size.y
+			left_in = maxf(left_in, safe_rect.position.x * scale_x)
+			top_in = maxf(top_in, safe_rect.position.y * scale_y)
+			right_in = maxf(right_in, maxf(0.0, win_size.x - (safe_rect.position.x + safe_rect.size.x)) * scale_x)
+			bottom_in = maxf(bottom_in, maxf(0.0, win_size.y - (safe_rect.position.y + safe_rect.size.y)) * scale_y)
+
+	return {
+		"left": left_in,
+		"top": top_in,
+		"right": right_in,
+		"bottom": bottom_in
+	}
 
 
 func set_controls_active(active: bool) -> void:
@@ -194,14 +227,20 @@ func _get_left_center() -> Vector2:
 	var vp := get_viewport_rect().size
 	if vp.x < 10.0 or vp.y < 10.0:
 		vp = Vector2(1280.0, 720.0)
-	return Vector2(154.0, vp.y - 146.0)
+	var insets := get_safe_insets()
+	var x_offset := maxf(154.0, 128.0 + float(insets["left"]))
+	var y_offset := maxf(146.0, 126.0 + float(insets["bottom"]))
+	return Vector2(x_offset, vp.y - y_offset)
 
 
 func _get_right_center() -> Vector2:
 	var vp := get_viewport_rect().size
 	if vp.x < 10.0 or vp.y < 10.0:
 		vp = Vector2(1280.0, 720.0)
-	return Vector2(vp.x - 154.0, vp.y - 146.0)
+	var insets := get_safe_insets()
+	var x_offset := maxf(154.0, 128.0 + float(insets["right"]))
+	var y_offset := maxf(146.0, 126.0 + float(insets["bottom"]))
+	return Vector2(vp.x - x_offset, vp.y - y_offset)
 
 
 func _draw() -> void:

@@ -108,10 +108,28 @@ You can launch the authoritative headless server in either of two ways (no windo
 ## 4. Controls & Gameplay Rules
 
 ### Controls (Mobile Touchscreen First + Desktop Testing Mode)
-- **Bottom-Left Virtual Joystick (`MOVE`)**: Touch and drag to move your character.
+- **Bottom-Left Virtual Joystick (`MOVE`)**: Touch and drag to move your character. Dynamic safe-area padding ensures full reachability without notch clipping.
 - **Bottom-Right Aiming Control (`AIM`)**: Touch and drag to rotate your forward-facing torso attack line. Releasing preserves your last aimed direction.
 - **Spectator Mode (`< PREV` / `NEXT >` / `MAIN MENU`)**: Automatically activates if you are eliminated while opponents remain alive, revealing all surviving players and following the selected survivor.
 - **Settings Panel (`SETTINGS` / `Esc`)**: Adjust **Master Volume**, **Music Volume**, **Sound FX Volume**, **Camera Speed**, or **Mute All Audio**.
+
+### Forced Mobile Landscape & Safe-Area Layout
+- **Orientation**: Configured for `window/handheld/orientation=4` (`DisplayServer.SCREEN_SENSOR_LANDSCAPE`), strictly preventing portrait orientation while allowing seamless 180° device flip.
+- **Multi-Aspect Ratio Support**: Canvas stretch mode is set to `canvas_items` + `expand` and the 3D camera uses `Camera3D.KEEP_HEIGHT`. Modern ultra-wide phones (18:9, 19.5:9, 20:9, 21:9) expand the horizontal field of view into the surrounding arena without distortion, letterboxing, or pillarboxing.
+- **Notch & Cutout Safe Areas**: Controls dynamically inspect `DisplayServer.get_display_safe_area()`. The movement joystick, aiming pad, HUD countdown card, top-right settings button, and lobby panels automatically offset inward from physical cutouts, punch-holes, and system navigation bars.
+
+### Google AdMob Integration & Placement Architecture
+- **Plugin**: Powered by the official Poing Studios AdMob v5.1.0 Android plugin built for Godot 4.7.2.
+- **Configuration Identifiers**:
+  - **App ID**: `ca-app-pub-2206945025056752~4220096311` (configured in `project.godot` under `[admob]` and injected into `AndroidManifest.xml` via Gradle export).
+  - **Production Interstitial Ad Unit ID**: `ca-app-pub-2206945025056752/7728096486` (configured in `[zapp_ads]`).
+  - **Google Official Test Interstitial Unit ID**: `ca-app-pub-3940256099942544/1033173712` (used automatically in all development and debug builds).
+- **Strict Break Gating**:
+  - Interstitial ads are shown **only** at natural match breaks: after the match result overlay has been shown and the player taps **PLAY AGAIN** or returns to the **MAIN MENU**.
+  - Interstitials are strictly prohibited and gated off during active gameplay, the 5-second countdown, aiming, laser shooting, matchmaking queues, lobby navigation, and room creation.
+  - A frequency cap (`min_interval_sec = 75.0`) prevents ads from showing too frequently across quick matches.
+  - If an ad fails to load or internet is unavailable, continuation callbacks fire immediately and the player proceeds with zero delay or freeze.
+  - Headless servers and desktop builds initialize safely without native Android singletons or mock UI obstruction.
 
 ### Authoritative Gameplay & Anti-Cheat Architecture
 - **5-Second Stealth Preparation Phase**: All living players are invincible during the 5-second countdown and opponents are hidden from each other.
@@ -130,6 +148,8 @@ You can launch the authoritative headless server in either of two ways (no windo
 ## 5. Project Structure
 
 ```text
+├── addons/
+│   └── admob/                            # Poing Studios AdMob v5.1.0 plugin & Android AARs for Godot 4.7.2
 ├── assets/
 │   └── low_poly_mesh_builder.gd          # Procedural low-poly 3D mesh builder
 ├── materials/                            # Arena tile, obstacle, and boundary materials
@@ -138,6 +158,8 @@ You can launch the authoritative headless server in either of two ways (no windo
 │   ├── character.tscn                    # Reusable character scene
 │   └── main_arena.tscn                   # Main match & lobby scene
 ├── scripts/
+│   ├── ads/
+│   │   └── admob_manager.gd              # AdMob lifecycle manager, frequency cap & break-gating coordinator
 │   ├── network/
 │   │   ├── dedicated_server.gd           # Authoritative ENet server (sessions, rooms, matchmaking, stats)
 │   │   ├── dedicated_server_runner.gd    # Headless server SceneTree runner script
@@ -161,6 +183,7 @@ You can launch the authoritative headless server in either of two ways (no windo
 ├── tests/
 │   ├── stress_client_worker.gd                       # Standalone OS-process client worker for multi-process stress tests
 │   ├── test_survival_arena.gd                        # Local AI & UI test suite (61 checks)
+│   ├── test_admob_and_landscape.gd                   # AdMob break gating, test ad safety & landscape suite (43 checks)
 │   ├── test_phase1_multiplayer.gd                    # Phase 1 authoritative server/client test suite (27 checks)
 │   ├── test_phase2_lobby_and_rooms.gd                # Phase 2 private rooms, matchmaking & AI fill suite (30 checks)
 │   ├── test_phase3_persistence_and_stats.gd          # Phase 3 accounts, stats & leaderboard suite (12 checks)
@@ -177,27 +200,42 @@ You can launch the authoritative headless server in either of two ways (no windo
 
 ## 6. Running All Automated Test Suites
 
-Run all seven automated test suites (`217 total assertions`) from PowerShell:
+Run all eight automated test suites (`260 total assertions`) from PowerShell:
 
 ```powershell
 # 1. Local Single-Player AI & UI Suite (61 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_survival_arena.gd
 
-# 2. Phase 1: Authoritative Dedicated Server & Multi-Client Sync (27 assertions)
+# 2. AdMob Break-Gating, Test Ad Safety & Mobile Landscape Suite (43 assertions)
+& "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_admob_and_landscape.gd
+
+# 3. Phase 1: Authoritative Dedicated Server & Multi-Client Sync (27 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase1_multiplayer.gd
 
-# 3. Phase 2: Private Rooms, Public Matchmaking, Host Controls & AI Fill (30 assertions)
+# 4. Phase 2: Private Rooms, Public Matchmaking, Host Controls & AI Fill (30 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase2_lobby_and_rooms.gd
 
-# 4. Phase 3: Persistent Accounts, Server-Validated Stats & Leaderboards (12 assertions)
+# 5. Phase 3: Persistent Accounts, Server-Validated Stats & Leaderboards (12 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_phase3_persistence_and_stats.gd
 
-# 5. End-to-End Multi-Process Verification & Auto-Connect Stabilization Suite (32 assertions)
+# 6. End-to-End Multi-Process Verification & Auto-Connect Stabilization Suite (32 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_e2e_multiprocess_verification.gd
 
-# 6. Comprehensive Multiplayer Reliability, Authority & Security Suite (39 assertions)
+# 7. Comprehensive Multiplayer Reliability, Authority & Security Suite (39 assertions)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_comprehensive_security_and_reliability.gd
 
-# 7. Automated Multi-Process Stress & Sustained Soak Suite (16 assertions, ~135s soak)
+# 8. Automated Multi-Process Stress & Sustained Soak Suite (16 assertions, ~135s soak)
 & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . -s res://tests/test_multiprocess_stress_and_soak.gd
 ```
+
+---
+
+## 7. Android Build & Export Instructions
+To generate a release or debug `.apk` with the AdMob plugin enabled:
+1. In the Godot Editor, install the Android build template via **Project -> Install Android Build Template**.
+2. Download and install Godot 4.7.2 export templates (`android_source.zip`) into `%APPDATA%\Godot\export_templates\4.7.2.stable\`.
+3. Set your Android SDK path and JDK 17 (Java SDK) path in Godot's **Editor Settings -> Export -> Android**.
+4. Run the export command:
+   ```powershell
+   & "C:\Users\danis\Downloads\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" --headless --path . --export-debug "Android" build/android/zapp_arena_debug.apk
+   ```

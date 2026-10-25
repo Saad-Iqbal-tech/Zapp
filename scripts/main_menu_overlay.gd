@@ -117,6 +117,15 @@ func set_online_lobby_open(open: bool) -> void:
 			online_modal.close_modal()
 
 
+func apply_safe_area_margins(safe_left: float, safe_top: float, safe_right: float, safe_bottom: float) -> void:
+	if not _lobby_container:
+		return
+	_lobby_container.add_theme_constant_override("margin_left", int(round(maxf(28.0, 16.0 + safe_left))))
+	_lobby_container.add_theme_constant_override("margin_right", int(round(maxf(28.0, 16.0 + safe_right))))
+	_lobby_container.add_theme_constant_override("margin_top", int(round(maxf(22.0, 12.0 + safe_top))))
+	_lobby_container.add_theme_constant_override("margin_bottom", int(round(maxf(26.0, 14.0 + safe_bottom))))
+
+
 func _process(delta: float) -> void:
 	if not visible:
 		return

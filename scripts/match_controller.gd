@@ -68,6 +68,7 @@ var hud: HUDController
 var audio_manager: AudioManager
 var multiplayer_client: MultiplayerClient
 var dedicated_server: DedicatedServer
+var ad_manager: AdMobManager
 
 var characters: Array[CharacterController] = []
 var ai_controllers: Array[AIController] = []
@@ -889,11 +890,56 @@ func _on_replay_requested() -> void:
 		if not in_room:
 			multiplayer_client.request_quick_join(2, false)
 		return
-	start_new_match()
+	_run_after_post_match_ad(start_new_match)
+
+
+## Returns true while the player is in active gameplay (countdown, aiming, shooting, laser resolution).
+func is_in_active_gameplay() -> bool:
+	return current_phase == MatchPhase.PREPARATION or current_phase == MatchPhase.RESOLUTION_FREEZE
+
+
+## Returns true while any online session / matchmaking / lobby / room operation is active.
+## Interstitials are never shown in these states (an Android interstitial pauses the main loop,
+## which would stall ENet polling and get the player timed out by the server).
+func is_online_or_lobby_busy() -> bool:
+	if is_online_match:
+		return true
+	if multiplayer_client == null:
+		return false
+	return (
+		multiplayer_client.is_connecting()
+		or multiplayer_client.in_matchmaking_queue
+		or multiplayer_client.is_room_request_in_flight()
+		or not multiplayer_client.current_room_code.is_empty()
+		or not multiplayer_client.current_session_id.is_empty()
+	)
+
+
+## Shows an interstitial at a safe post-match break (if one is loaded and allowed), then continues.
+## The continuation always runs, whether the ad shows, fails, is skipped, or AdMob is unavailable.
+func _run_after_post_match_ad(continuation: Callable) -> void:
+	if ad_manager == null:
+		continuation.call()
+		return
+	if ad_manager.is_showing_interstitial:
+		return # Ignore repeated taps while an ad is on screen
+	ad_manager.show_post_match_interstitial_then(
+		int(current_phase),
+		is_in_active_gameplay(),
+		is_online_or_lobby_busy(),
+		continuation
+	)
 
 
 func return_to_lobby() -> void:
 	var was_online_room := is_online_match and multiplayer_client != null and multiplayer_client.is_connected_to_server() and not multiplayer_client.current_room_code.is_empty()
+	if current_phase == MatchPhase.MATCH_OVER and not was_online_room and not is_online_match:
+		_run_after_post_match_ad(func(): _do_return_to_lobby(false))
+		return
+	_do_return_to_lobby(was_online_room)
+
+
+func _do_return_to_lobby(was_online_room: bool) -> void:
 	return_to_lobby_requested.emit()
 	if not lobby_scene_path.is_empty() and ResourceLoader.exists(lobby_scene_path):
 		get_tree().change_scene_to_file(lobby_scene_path)
@@ -907,6 +953,10 @@ func _setup_subsystems() -> void:
 	audio_manager = AudioManager.new()
 	audio_manager.name = "AudioManager"
 	add_child(audio_manager)
+
+	ad_manager = AdMobManager.new()
+	ad_manager.name = "AdMobManager"
+	add_child(ad_manager)
 
 	multiplayer_client = MultiplayerClient.new()
 	multiplayer_client.name = "MultiplayerClient"
