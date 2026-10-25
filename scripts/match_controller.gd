@@ -97,8 +97,29 @@ func _ready() -> void:
 	_apply_client_cli_overrides()
 	if start_on_main_menu:
 		enter_main_menu()
+		_show_splash_screen()
 	else:
 		start_new_match()
+
+
+func _show_splash_screen() -> void:
+	if DisplayServer.get_name() == "headless" or OS.has_feature("dedicated_server"):
+		return
+	for arg in OS.get_cmdline_args():
+		if arg.contains("test") or arg == "--no-splash":
+			return
+
+	if audio_manager:
+		audio_manager.stop_background_music()
+
+	var splash := SplashScreen.new()
+	splash.name = "SplashScreen"
+	add_child(splash)
+	splash.splash_finished.connect(func():
+		if audio_manager and current_phase == MatchPhase.MAIN_MENU:
+			audio_manager.start_background_music()
+	)
+	splash.start_splash(audio_manager)
 
 
 func _apply_client_cli_overrides() -> void:

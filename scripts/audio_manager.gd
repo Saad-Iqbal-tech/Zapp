@@ -22,6 +22,7 @@ var _drop_player: AudioStreamPlayer
 var _warning_player: AudioStreamPlayer
 var _tick_player: AudioStreamPlayer
 var _elim_player: AudioStreamPlayer
+var _splash_player: AudioStreamPlayer
 
 var _bgm_stream: AudioStreamWAV
 var _laser_stream: AudioStreamWAV
@@ -29,6 +30,7 @@ var _drop_stream: AudioStreamWAV
 var _warning_stream: AudioStreamWAV
 var _tick_stream: AudioStreamWAV
 var _elim_stream: AudioStreamWAV
+var _splash_stream: AudioStreamWAV
 
 
 func _ready() -> void:
@@ -95,6 +97,14 @@ func _apply_volumes() -> void:
 		_tick_player.volume_db = sfx_db - 6.0
 	if _elim_player:
 		_elim_player.volume_db = sfx_db - 2.0
+	if _splash_player:
+		_splash_player.volume_db = sfx_db - 1.0
+
+
+func play_splash_powerup() -> void:
+	if _splash_player:
+		_splash_player.pitch_scale = 1.0
+		_splash_player.play()
 
 
 func play_laser_shoot() -> void:
@@ -163,6 +173,12 @@ func _setup_players() -> void:
 	_elim_player.volume_db = -2.0
 	add_child(_elim_player)
 
+	_splash_player = AudioStreamPlayer.new()
+	_splash_player.name = "SplashSFXPlayer"
+	_splash_player.stream = _splash_stream
+	_splash_player.volume_db = -1.0
+	add_child(_splash_player)
+
 
 func _generate_all_streams() -> void:
 	_bgm_stream = _build_bgm_stream()
@@ -171,6 +187,7 @@ func _generate_all_streams() -> void:
 	_warning_stream = _build_warning_stream()
 	_tick_stream = _build_tick_stream()
 	_elim_stream = _build_elimination_stream()
+	_splash_stream = _build_splash_stream()
 
 
 func _build_bgm_stream() -> AudioStreamWAV:
@@ -445,3 +462,67 @@ func _build_elimination_stream() -> AudioStreamWAV:
 	wav.loop_end = total_samples
 	wav.data = pcm
 	return wav
+
+
+func _build_splash_stream() -> AudioStreamWAV:
+	# 0.82s punchy sci-fi powerup chord and electric zap for game launch splash screen
+	var duration := 0.82
+	var total_samples := int(duration * SAMPLE_RATE)
+	var pcm := PackedByteArray()
+	pcm.resize((total_samples + PADDING_SAMPLES) * 2)
+
+	var charge_phase := 0.0
+	var chord_phase_1 := 0.0
+	var chord_phase_2 := 0.0
+	var chord_phase_3 := 0.0
+	var shimmer_phase := 0.0
+	var noise_seed := 1337
+
+	for i in range(total_samples):
+		var t := float(i) / float(SAMPLE_RATE)
+		var mix := 0.0
+
+		if t < 0.28:
+			# Ascending frequency sweep (140 Hz up to 680 Hz)
+			var progress := t / 0.28
+			var sweep_freq := 140.0 + progress * progress * 540.0
+			charge_phase = fmod(charge_phase + sweep_freq / float(SAMPLE_RATE), 1.0)
+			var env := sin(progress * PI * 0.5)
+			# Saw + sine energy charge
+			var wave := (charge_phase * 2.0 - 1.0) * 0.4 + sin(charge_phase * TAU) * 0.6
+			mix = wave * env * 0.45
+		else:
+			# Impact & harmonic chord bloom (A4 440, C#5 554, E5 659, A5 880)
+			var ct := t - 0.28
+			var chord_env := exp(-ct * 5.2)
+			var shimmer_env := exp(-ct * 7.5)
+
+			chord_phase_1 = fmod(chord_phase_1 + 440.0 / float(SAMPLE_RATE), 1.0)
+			chord_phase_2 = fmod(chord_phase_2 + 554.37 / float(SAMPLE_RATE), 1.0)
+			chord_phase_3 = fmod(chord_phase_3 + 659.25 / float(SAMPLE_RATE), 1.0)
+			shimmer_phase = fmod(shimmer_phase + 880.0 / float(SAMPLE_RATE), 1.0)
+
+			noise_seed = (noise_seed * 1103515245 + 12345) & 0x7fffffff
+			var spark_noise := (float(noise_seed % 65536) / 32768.0) - 1.0
+			var spark_env := exp(-ct * 28.0) * (0.35 if ct < 0.1 else 0.0)
+
+			var chord := (
+				sin(chord_phase_1 * TAU) * 0.35
+				+ sin(chord_phase_2 * TAU) * 0.28
+				+ sin(chord_phase_3 * TAU) * 0.22
+				+ sin(shimmer_phase * TAU) * shimmer_env * 0.20
+			)
+			var sub_kick := sin(ct * 65.0 * TAU) * exp(-ct * 12.0) * 0.35
+			mix = chord * chord_env + spark_noise * spark_env + sub_kick
+
+		pcm.encode_s16(i * 2, int(clampf(mix, -0.98, 0.98) * 32767.0))
+
+	var wav_splash := AudioStreamWAV.new()
+	wav_splash.format = AudioStreamWAV.FORMAT_16_BITS
+	wav_splash.mix_rate = SAMPLE_RATE
+	wav_splash.stereo = false
+	wav_splash.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	wav_splash.loop_begin = 0
+	wav_splash.loop_end = total_samples
+	wav_splash.data = pcm
+	return wav_splash
