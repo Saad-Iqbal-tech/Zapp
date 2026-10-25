@@ -14,6 +14,11 @@ func _start_dedicated_server() -> void:
 	var port := NetProtocol.DEFAULT_PORT
 	var bind_ip := "0.0.0.0"
 
+	# Check environment variable PORT (standard on Render and container hosts)
+	var env_port := OS.get_environment("PORT").strip_edges()
+	if not env_port.is_empty() and env_port.is_valid_int():
+		port = int(env_port)
+
 	var args := OS.get_cmdline_user_args()
 	if args.is_empty():
 		args = OS.get_cmdline_args()

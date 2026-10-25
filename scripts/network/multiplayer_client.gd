@@ -1,8 +1,8 @@
 class_name MultiplayerClient
 extends Node
-## Multiplayer client using ENetMultiplayerPeer + SceneMultiplayer.
-## Connects to DedicatedServer, transmits touch movement/aiming inputs,
-## and receives authoritative match state, round timers, laser resolutions, and lobby updates.
+## Multiplayer client using WebSocketMultiplayerPeer + SceneMultiplayer.
+## Connects to DedicatedServer via WebSockets (supporting Render free tier hosting), transmits touch
+## movement/aiming inputs, and receives authoritative match state, round timers, laser resolutions, and lobby updates.
 
 signal connected_to_game_server(peer_id: int, assigned_name: String)
 signal connection_error(reason: String)
@@ -20,6 +20,7 @@ signal authoritative_arena_shrink_event(shrink_msg: Dictionary)
 signal authoritative_player_disconnected(disc_msg: Dictionary)
 signal authoritative_match_ended(end_msg: Dictionary)
 signal stats_response_received(stats_msg: Dictionary)
+signal leaderboard_received(entries: Array)
 signal connection_state_changed(new_state: ConnState, status_text: String)
 
 enum ConnState {
@@ -31,14 +32,19 @@ enum ConnState {
 
 static var _in_process_client_counter: int = 0
 
+const HEARTBEAT_INTERVAL_SEC: float = 15.0
+
+var server_url: String = NetProtocol.DEFAULT_WS_URL
 var server_host: String = NetProtocol.DEFAULT_HOST
 var server_port: int = NetProtocol.DEFAULT_PORT
 var player_name: String = "STRIKER_01"
 var account_token: String = ""
-var connect_timeout_sec: float = 4.5
+var connect_timeout_sec: float = 65.0
 
 var conn_state: ConnState = ConnState.DISCONNECTED
 var has_welcome: bool = false
+var is_waking_up: bool = false
+var latency_ms: int = 0
 var local_peer_id: int = 0
 var local_slot_id: int = -1
 var current_session_id: String = ""
@@ -51,10 +57,12 @@ var queued_players_count: int = 0
 var last_error_code: String = ""
 var last_error_message: String = ""
 
-var _peer: ENetMultiplayerPeer
+var _peer: WebSocketMultiplayerPeer
 var _mp: SceneMultiplayer
 var _connect_elapsed: float = 0.0
 var _connect_retry_accum: float = 0.0
+var _wakeup_retry_accum: float = 0.0
+var _heartbeat_accum: float = 0.0
 var _input_send_accum: float = 0.0
 var _input_seq: int = 0
 var _pending_move_input: Vector2 = Vector2.ZERO
@@ -64,16 +72,23 @@ var _room_request_in_flight: bool = false
 var _room_request_elapsed: float = 0.0
 
 
+func _ensure_mp() -> void:
+	if _mp == null:
+		_mp = SceneMultiplayer.new()
+		_mp.server_relay = false
+		_mp.root_path = get_path() if is_inside_tree() else NodePath("")
+		_mp.connected_to_server.connect(_on_connected_to_server)
+		_mp.connection_failed.connect(_on_connection_failed)
+		_mp.server_disconnected.connect(_on_server_disconnected)
+		_mp.peer_packet.connect(_on_peer_packet)
+	elif is_inside_tree() and _mp.root_path.is_empty():
+		_mp.root_path = get_path()
+
+
 func _ready() -> void:
 	if account_token.is_empty():
 		account_token = _load_or_generate_account_token()
-	_mp = SceneMultiplayer.new()
-	_mp.server_relay = false
-	_mp.root_path = get_path()
-	_mp.connected_to_server.connect(_on_connected_to_server)
-	_mp.connection_failed.connect(_on_connection_failed)
-	_mp.server_disconnected.connect(_on_server_disconnected)
-	_mp.peer_packet.connect(_on_peer_packet)
+	_ensure_mp()
 
 
 func _exit_tree() -> void:
@@ -136,6 +151,8 @@ func get_connection_status_text() -> String:
 		ConnState.CONNECTED:
 			return "Connected" if has_welcome else "Connecting"
 		ConnState.CONNECTING:
+			if is_waking_up or _connect_elapsed >= 3.5:
+				return "Connecting (Server is waking up...)"
 			return "Connecting"
 		ConnState.CONNECTION_FAILED:
 			return "Connection Failed"
@@ -186,39 +203,42 @@ func _transition_to_connection_failed(reason: String) -> void:
 
 
 func connect_to_server(
-	host: String = NetProtocol.DEFAULT_HOST,
+	host_or_url: String = NetProtocol.DEFAULT_WS_URL,
 	port: int = NetProtocol.DEFAULT_PORT,
 	requested_name: String = ""
 ) -> Error:
-	var clean_host := host.strip_edges()
+	_ensure_mp()
+	var clean_input := host_or_url.strip_edges()
 	if not requested_name.strip_edges().is_empty():
 		player_name = NetProtocol.sanitize_player_name(requested_name, player_name)
 
+	var target_url := NetProtocol.normalize_ws_url(clean_input, port)
+
 	# Prevent duplicate connection attempts while already connecting to the same endpoint
-	if is_connecting() and clean_host == server_host and port == server_port:
+	if is_connecting() and target_url == server_url:
 		return OK
 
-	if not NetProtocol.is_valid_host_or_ip(clean_host):
-		_transition_to_connection_failed("Invalid server IP/host '%s'. Enter a valid IPv4 address or hostname." % clean_host)
-		return ERR_INVALID_PARAMETER
-
-	if not NetProtocol.is_valid_port(port):
-		_transition_to_connection_failed("Invalid server port (%d). Port must be between 1 and 65535." % port)
+	if not NetProtocol.is_valid_host_or_url(clean_input):
+		_transition_to_connection_failed("Invalid server URL or address '%s'." % clean_input)
 		return ERR_INVALID_PARAMETER
 
 	_reset_peer_state(ConnState.DISCONNECTED, false)
-	server_host = clean_host
+	server_url = target_url
+	server_host = clean_input
 	server_port = port
 
-	_peer = ENetMultiplayerPeer.new()
-	var err := _peer.create_client(server_host, server_port, 2)
+	_peer = WebSocketMultiplayerPeer.new()
+	var err := _peer.create_client(server_url)
 	if err != OK:
-		_transition_to_connection_failed("Could not create client for %s:%d (error %d)" % [server_host, server_port, err])
+		_transition_to_connection_failed("Could not create WebSocket client for %s (error %d)" % [server_url, err])
 		return err
 
 	_mp.multiplayer_peer = _peer
 	_connect_elapsed = 0.0
 	_connect_retry_accum = 0.0
+	_wakeup_retry_accum = 0.0
+	_heartbeat_accum = 0.0
+	is_waking_up = false
 	_set_conn_state(ConnState.CONNECTING)
 	return OK
 
@@ -327,6 +347,10 @@ func request_stats() -> void:
 	send_message({"type": NetProtocol.C2S_GET_STATS}, true)
 
 
+func request_leaderboard(limit: int = 20) -> void:
+	send_message({"type": NetProtocol.C2S_GET_LEADERBOARD, "limit": limit}, true)
+
+
 func is_room_host() -> bool:
 	return not current_room_code.is_empty() and int(latest_room_state.get("host_peer_id", -1)) == local_peer_id
 
@@ -334,6 +358,10 @@ func is_room_host() -> bool:
 func send_message(msg: Dictionary, reliable: bool = true) -> void:
 	if conn_state != ConnState.CONNECTED or not _mp or not _mp.has_multiplayer_peer():
 		return
+	if _peer:
+		var pkt_peer := _peer.get_peer(1)
+		if pkt_peer == null or pkt_peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
+			return
 	var mode := MultiplayerPeer.TRANSFER_MODE_RELIABLE if reliable else MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED
 	var channel := NetProtocol.CHANNEL_RELIABLE if reliable else NetProtocol.CHANNEL_UNRELIABLE_STATE
 	var raw := var_to_bytes(msg)
@@ -349,22 +377,21 @@ func _process(delta: float) -> void:
 
 	if is_connecting():
 		_connect_elapsed += delta
-		_connect_retry_accum += delta
+		if _connect_elapsed >= 3.5 and not is_waking_up:
+			is_waking_up = true
+			connection_state_changed.emit(conn_state, get_connection_status_text())
+
 		if _connect_elapsed >= connect_timeout_sec:
 			_transition_to_connection_failed(
-				"Connection timed out (%s:%d) — verify Dedicated Server is running." % [server_host, server_port]
+				"Connection timed out (%s) — verify Dedicated Server is running." % server_url
 			)
 			return
-		# If still waiting on initial UDP handshake (e.g. server just finished booting), send a fresh attempt every 1.0s
-		if conn_state == ConnState.CONNECTING and _connect_retry_accum >= 1.0 and (_connect_elapsed + 0.5) < connect_timeout_sec:
-			_connect_retry_accum = 0.0
-			if _mp:
-				_mp.multiplayer_peer = null
-			if _peer:
-				_peer.close()
-			_peer = ENetMultiplayerPeer.new()
-			if _peer.create_client(server_host, server_port, 2) == OK:
-				_mp.multiplayer_peer = _peer
+
+		# Handle automatic retry if connection dropped while Render free tier container was waking up
+		if _wakeup_retry_accum > 0.0:
+			_wakeup_retry_accum -= delta
+			if _wakeup_retry_accum <= 0.0 and conn_state == ConnState.CONNECTING:
+				_retry_connection_attempt()
 		return
 
 	if _room_request_in_flight:
@@ -373,12 +400,35 @@ func _process(delta: float) -> void:
 			_room_request_in_flight = false
 			_room_request_elapsed = 0.0
 
-	if conn_state == ConnState.CONNECTED and _in_active_match:
-		_input_send_accum += delta
-		var interval := 1.0 / NetProtocol.CLIENT_INPUT_RATE_HZ
-		if _input_send_accum >= interval:
-			_input_send_accum = fmod(_input_send_accum, interval)
-			_transmit_current_input()
+	if conn_state == ConnState.CONNECTED:
+		# Application-level heartbeat keeps connection alive through Render's 55s proxy timeout
+		_heartbeat_accum += delta
+		if _heartbeat_accum >= HEARTBEAT_INTERVAL_SEC:
+			_heartbeat_accum = 0.0
+			send_message({
+				"type": NetProtocol.C2S_PING,
+				"client_time": Time.get_ticks_msec()
+			}, false)
+
+		if _in_active_match:
+			_input_send_accum += delta
+			var interval := 1.0 / NetProtocol.CLIENT_INPUT_RATE_HZ
+			if _input_send_accum >= interval:
+				_input_send_accum = fmod(_input_send_accum, interval)
+				_transmit_current_input()
+
+
+func _retry_connection_attempt() -> void:
+	if conn_state != ConnState.CONNECTING:
+		return
+	if _mp:
+		_mp.multiplayer_peer = null
+	if _peer:
+		_peer.close()
+	_peer = WebSocketMultiplayerPeer.new()
+	var err := _peer.create_client(server_url)
+	if err == OK:
+		_mp.multiplayer_peer = _peer
 
 
 func _transmit_current_input() -> void:
@@ -396,10 +446,11 @@ func _transmit_current_input() -> void:
 func _on_connected_to_server() -> void:
 	conn_state = ConnState.CONNECTED
 	local_peer_id = _mp.get_unique_id()
+	is_waking_up = false
 	if _peer:
 		var pkt_peer := _peer.get_peer(1)
-		if pkt_peer:
-			pkt_peer.set_timeout(1000, 2000, 3500)
+		if pkt_peer and pkt_peer is WebSocketPeer:
+			pkt_peer.set_no_delay(true)
 	send_message({
 		"type": NetProtocol.C2S_HELLO,
 		"name": player_name,
@@ -408,14 +459,25 @@ func _on_connected_to_server() -> void:
 
 
 func _on_connection_failed() -> void:
-	_transition_to_connection_failed("Connection refused or unreachable (%s:%d)" % [server_host, server_port])
+	# If within wake-up timeout window, retry gracefully instead of failing immediately
+	if _connect_elapsed + 5.0 < connect_timeout_sec:
+		is_waking_up = true
+		_wakeup_retry_accum = 2.5
+		connection_state_changed.emit(conn_state, get_connection_status_text())
+		return
+	_transition_to_connection_failed("Connection refused or unreachable (%s)" % server_url)
 
 
 func _on_server_disconnected() -> void:
 	var was_welcomed := has_welcome
-	var reason := "Lost connection to server (%s:%d)" % [server_host, server_port]
+	var reason := "Lost connection to server (%s)" % server_url
 	last_error_code = "ERR_SERVER_DISCONNECTED"
 	last_error_message = reason
+	_reset_peer_state(ConnState.CONNECTION_FAILED, true)
+	if was_welcomed:
+		disconnected_from_game_server.emit(reason)
+	else:
+		connection_error.emit(reason)
 	_reset_peer_state(ConnState.CONNECTION_FAILED, true)
 	if was_welcomed:
 		disconnected_from_game_server.emit(reason)
@@ -516,3 +578,12 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 			if msg.has("profile") and typeof(msg["profile"]) == TYPE_DICTIONARY:
 				latest_profile = msg["profile"]
 			stats_response_received.emit(msg)
+
+		NetProtocol.S2C_LEADERBOARD:
+			var entries: Array = msg.get("entries", [])
+			leaderboard_received.emit(entries)
+
+		NetProtocol.S2C_PONG:
+			var client_time := int(msg.get("client_time", 0))
+			if client_time > 0:
+				latency_ms = maxi(0, Time.get_ticks_msec() - client_time)

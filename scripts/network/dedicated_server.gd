@@ -1,6 +1,6 @@
 class_name DedicatedServer
 extends Node3D
-## Authoritative headless Godot multiplayer server using ENetMultiplayerPeer + SceneMultiplayer.
+## Authoritative headless Godot multiplayer server using WebSocketMultiplayerPeer + SceneMultiplayer.
 ## Manages connected clients, private rooms (room codes, host controls, ready states, AI fill),
 ## honest public matchmaking queue, match sessions, input validation, and state broadcasting.
 
@@ -21,7 +21,7 @@ var bind_address: String = "0.0.0.0"
 var persistence_save_path: String = ServerPersistence.DEFAULT_SAVE_PATH
 var persistence: ServerPersistence
 
-var _peer: ENetMultiplayerPeer
+var _peer: WebSocketMultiplayerPeer
 var _mp: SceneMultiplayer
 var _is_running: bool = false
 var _rng := RandomNumberGenerator.new()
@@ -54,16 +54,27 @@ var default_preparation_duration: float = 5.0
 var default_shrink_interval: float = 11.0
 
 
-func _ready() -> void:
-	_rng.randomize()
+func _ensure_mp() -> void:
+	if _mp == null:
+		_mp = SceneMultiplayer.new()
+		_mp.server_relay = false
+		_mp.root_path = get_path() if is_inside_tree() else NodePath("")
+		_mp.peer_connected.connect(_on_peer_connected)
+		_mp.peer_disconnected.connect(_on_peer_disconnected)
+		_mp.peer_packet.connect(_on_peer_packet)
+	elif is_inside_tree() and _mp.root_path.is_empty():
+		_mp.root_path = get_path()
+
+
+func _ensure_persistence() -> void:
 	if persistence == null:
 		persistence = ServerPersistence.new(persistence_save_path)
-	_mp = SceneMultiplayer.new()
-	_mp.server_relay = false
-	_mp.root_path = get_path()
-	_mp.peer_connected.connect(_on_peer_connected)
-	_mp.peer_disconnected.connect(_on_peer_disconnected)
-	_mp.peer_packet.connect(_on_peer_packet)
+
+
+func _ready() -> void:
+	_rng.randomize()
+	_ensure_persistence()
+	_ensure_mp()
 
 
 func start_server(
@@ -71,23 +82,29 @@ func start_server(
 	bind_ip: String = "0.0.0.0",
 	max_clients: int = NetProtocol.MAX_CLIENTS
 ) -> Error:
+	_ensure_persistence()
+	_ensure_mp()
 	if _is_running:
 		stop_server()
 
+	# Check environment variable PORT (standard on Render and container hosts)
+	var env_port := OS.get_environment("PORT").strip_edges()
+	if not env_port.is_empty() and env_port.is_valid_int() and port == NetProtocol.DEFAULT_PORT:
+		port = int(env_port)
+
 	listen_port = port
 	bind_address = bind_ip
-	_peer = ENetMultiplayerPeer.new()
-	if not bind_ip.is_empty() and bind_ip != "*":
-		_peer.set_bind_ip(bind_ip)
+	_peer = WebSocketMultiplayerPeer.new()
 
-	var err := _peer.create_server(port, max_clients, 2)
+	var effective_bind := bind_ip if (not bind_ip.is_empty() and bind_ip != "0.0.0.0") else "*"
+	var err := _peer.create_server(port, effective_bind)
 	if err != OK:
-		push_error("[DedicatedServer] Failed to start ENet server on %s:%d (err=%d)" % [bind_ip, port, err])
+		push_error("[DedicatedServer] Failed to start WebSocket server on %s:%d (err=%d)" % [bind_ip, port, err])
 		return err
 
 	_mp.multiplayer_peer = _peer
 	_is_running = true
-	print("[DedicatedServer] Listening on UDP %s:%d (max_clients=%d)" % [bind_ip, port, max_clients])
+	print("[DedicatedServer] Listening on WebSocket %s:%d (bind=%s, max_clients=%d)" % [bind_ip, port, effective_bind, max_clients])
 	return OK
 
 
@@ -221,7 +238,7 @@ func send_to_peer(peer_id: int, msg: Dictionary, reliable: bool = true) -> void:
 		return
 	if _peer:
 		var pkt_peer := _peer.get_peer(peer_id)
-		if pkt_peer == null or pkt_peer.get_state() != ENetPacketPeer.STATE_CONNECTED:
+		if pkt_peer == null or pkt_peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
 			return
 	var mode := MultiplayerPeer.TRANSFER_MODE_RELIABLE if reliable else MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED
 	var channel := NetProtocol.CHANNEL_RELIABLE if reliable else NetProtocol.CHANNEL_UNRELIABLE_STATE
@@ -439,8 +456,8 @@ func _on_peer_connected(peer_id: int) -> void:
 	}
 	if _peer:
 		var pkt_peer := _peer.get_peer(peer_id)
-		if pkt_peer:
-			pkt_peer.set_timeout(1000, 2000, 3500)
+		if pkt_peer and pkt_peer is WebSocketPeer:
+			pkt_peer.set_no_delay(true)
 	client_connected.emit(peer_id)
 
 
@@ -627,6 +644,9 @@ func _on_peer_packet(peer_id: int, packet: PackedByteArray) -> void:
 		NetProtocol.C2S_GET_STATS:
 			_send_stats_to_peer(peer_id)
 
+		NetProtocol.C2S_GET_LEADERBOARD:
+			_send_leaderboard_to_peer(peer_id, _safe_int(msg.get("limit", 20), 20))
+
 		NetProtocol.C2S_PING:
 			send_to_peer(peer_id, {
 				"type": NetProtocol.S2C_PONG,
@@ -676,6 +696,16 @@ func _send_stats_to_peer(peer_id: int) -> void:
 		"profile": persistence.get_public_profile(uname),
 		"leaderboard": persistence.get_leaderboard(20),
 		"global_match_history": persistence.global_match_history.slice(0, 15)
+	}, true)
+
+
+func _send_leaderboard_to_peer(peer_id: int, limit: int = 20) -> void:
+	if not connected_peers.has(peer_id) or persistence == null:
+		return
+	var clean_limit := clampi(limit, 1, 100)
+	send_to_peer(peer_id, {
+		"type": NetProtocol.S2C_LEADERBOARD,
+		"entries": persistence.get_leaderboard(clean_limit)
 	}, true)
 
 

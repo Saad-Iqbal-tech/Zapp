@@ -1,0 +1,23 @@
+# ============================================================================
+# Render Blueprint Specification for Zapp Survival Arena Dedicated Server
+# Docs: https://render.com/docs/blueprint-spec
+# ============================================================================
+
+services:
+  - type: web
+    name: zapp-dedicated-server
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: BIND_IP
+        value: 0.0.0.0
+      # Optional: External PostgreSQL / Supabase credentials for permanent leaderboards
+      - key: PERSISTENCE_DB_URL
+        sync: false
+      - key: PERSISTENCE_DB_KEY
+        sync: false

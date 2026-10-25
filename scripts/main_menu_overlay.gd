@@ -339,36 +339,49 @@ func _build_main_menu_ui() -> void:
 	hero_lbl.add_theme_color_override("font_color", Color(0.55, 0.98, 1.0))
 	hero_tag.add_child(hero_lbl)
 
-	# --- BOTTOM-LEFT: Smaller Buttons for Settings, How to Play, and Exit ---
+	# --- BOTTOM-LEFT: Buttons for Settings, How to Play, Leaderboard, and Exit ---
 	var nav_hbox := HBoxContainer.new()
 	nav_hbox.name = "SecondaryNavButtons"
-	nav_hbox.add_theme_constant_override("separation", 12)
+	nav_hbox.add_theme_constant_override("separation", 10)
 	inner.add_child(nav_hbox)
 	nav_hbox.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
 	nav_hbox.offset_top = -64.0
-	nav_hbox.offset_right = 490.0
+	nav_hbox.offset_right = 620.0
 
 	settings_button = Button.new()
 	settings_button.name = "MainMenuSettingsButton"
 	settings_button.text = "SETTINGS"
-	settings_button.custom_minimum_size = Vector2(142.0, 56.0)
-	UIStyleHelper.apply_chunky_button_style(settings_button, UIStyleHelper.COLOR_SKY_BLUE, UIStyleHelper.COLOR_SKY_BORDER, 17, 16, 6)
+	settings_button.custom_minimum_size = Vector2(130.0, 56.0)
+	UIStyleHelper.apply_chunky_button_style(settings_button, UIStyleHelper.COLOR_SKY_BLUE, UIStyleHelper.COLOR_SKY_BORDER, 16, 14, 5)
 	settings_button.pressed.connect(func(): settings_requested.emit())
 	nav_hbox.add_child(settings_button)
 
 	how_to_play_button = Button.new()
 	how_to_play_button.name = "HowToPlayButton"
 	how_to_play_button.text = "HOW TO PLAY"
-	how_to_play_button.custom_minimum_size = Vector2(162.0, 56.0)
-	UIStyleHelper.apply_chunky_button_style(how_to_play_button, UIStyleHelper.COLOR_PURPLE, UIStyleHelper.COLOR_PURPLE_BORDER, 17, 16, 6)
+	how_to_play_button.custom_minimum_size = Vector2(148.0, 56.0)
+	UIStyleHelper.apply_chunky_button_style(how_to_play_button, UIStyleHelper.COLOR_PURPLE, UIStyleHelper.COLOR_PURPLE_BORDER, 16, 14, 5)
 	how_to_play_button.pressed.connect(func(): set_how_to_play_open(true))
 	nav_hbox.add_child(how_to_play_button)
+
+	var leaderboard_button := Button.new()
+	leaderboard_button.name = "MainMenuLeaderboardButton"
+	leaderboard_button.text = "RANKS"
+	leaderboard_button.custom_minimum_size = Vector2(120.0, 56.0)
+	UIStyleHelper.apply_chunky_button_style(leaderboard_button, UIStyleHelper.COLOR_GOLD, UIStyleHelper.COLOR_GOLD_BORDER, 16, 14, 5)
+	leaderboard_button.pressed.connect(func():
+		set_online_lobby_open(true)
+		if online_modal:
+			if not online_modal._showing_stats:
+				online_modal.toggle_stats_view()
+	)
+	nav_hbox.add_child(leaderboard_button)
 
 	exit_button = Button.new()
 	exit_button.name = "ExitGameButton"
 	exit_button.text = "EXIT"
-	exit_button.custom_minimum_size = Vector2(106.0, 56.0)
-	UIStyleHelper.apply_chunky_button_style(exit_button, UIStyleHelper.COLOR_CORAL_RED, UIStyleHelper.COLOR_CORAL_BORDER, 17, 16, 6)
+	exit_button.custom_minimum_size = Vector2(98.0, 56.0)
+	UIStyleHelper.apply_chunky_button_style(exit_button, UIStyleHelper.COLOR_CORAL_RED, UIStyleHelper.COLOR_CORAL_BORDER, 16, 14, 5)
 	exit_button.pressed.connect(func():
 		exit_requested.emit()
 		if get_tree():

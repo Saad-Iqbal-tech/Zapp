@@ -5,6 +5,7 @@ extends RefCounted
 
 const DEFAULT_PORT: int = 7777
 const DEFAULT_HOST: String = "127.0.0.1"
+const DEFAULT_WS_URL: String = "ws://127.0.0.1:7777"
 const MAX_CLIENTS: int = 64
 const MAX_PLAYERS_PER_MATCH: int = 5
 const SERVER_TICK_RATE_HZ: float = 20.0
@@ -32,6 +33,7 @@ const C2S_START_ROOM_MATCH: String = "c2s_start_room_match"
 const C2S_PLAYER_INPUT: String = "c2s_player_input"
 const C2S_REQUEST_REMATCH: String = "c2s_request_rematch"
 const C2S_GET_STATS: String = "c2s_get_stats"
+const C2S_GET_LEADERBOARD: String = "c2s_get_leaderboard"
 const C2S_PING: String = "c2s_ping"
 
 # Server -> Client message types
@@ -49,6 +51,7 @@ const S2C_ARENA_SHRINK_EVENT: String = "s2c_arena_shrink_event"
 const S2C_PLAYER_DISCONNECTED: String = "s2c_player_disconnected"
 const S2C_MATCH_ENDED: String = "s2c_match_ended"
 const S2C_STATS_RESPONSE: String = "s2c_stats_response"
+const S2C_LEADERBOARD: String = "s2c_leaderboard"
 const S2C_PONG: String = "s2c_pong"
 
 
@@ -148,3 +151,66 @@ static func detect_lan_ipv4() -> String:
 		if fallback_ipv4.is_empty():
 			fallback_ipv4 = a
 	return fallback_ipv4 if not fallback_ipv4.is_empty() else DEFAULT_HOST
+
+
+static func normalize_ws_url(input: String, default_port: int = DEFAULT_PORT) -> String:
+	var raw := input.strip_edges()
+	if raw.is_empty():
+		return DEFAULT_WS_URL
+
+	# Convert HTTP/HTTPS schemes to WebSocket equivalents
+	if raw.begins_with("http://"):
+		raw = "ws://" + raw.substr(7)
+	elif raw.begins_with("https://"):
+		raw = "wss://" + raw.substr(8)
+
+	if raw.begins_with("ws://") or raw.begins_with("wss://"):
+		return raw
+
+	# Determine scheme if none provided: Render domains default to wss://, otherwise ws://
+	var is_secure := raw.contains(".onrender.com") or raw.ends_with(":443")
+	var scheme := "wss://" if is_secure else "ws://"
+
+	# If raw string already has port specified (e.g. "127.0.0.1:7777" or "host.com:8080")
+	var colon_idx := raw.find(":")
+	if colon_idx != -1:
+		return scheme + raw
+
+	# No port in string
+	if is_secure:
+		# Render terminates TLS on port 443 by default; no port suffix needed
+		return scheme + raw
+	else:
+		return scheme + raw + ":" + str(default_port)
+
+
+static func is_valid_host_or_url(input: String) -> bool:
+	var raw := input.strip_edges()
+	if raw.is_empty():
+		return false
+
+	# If prefixed with scheme, strip it before validating host
+	if raw.begins_with("ws://"):
+		raw = raw.substr(5)
+	elif raw.begins_with("wss://"):
+		raw = raw.substr(6)
+	elif raw.begins_with("http://"):
+		raw = raw.substr(7)
+	elif raw.begins_with("https://"):
+		raw = raw.substr(8)
+
+	# Strip path component if present
+	var slash_idx := raw.find("/")
+	if slash_idx != -1:
+		raw = raw.left(slash_idx)
+
+	# Strip port component if present
+	var colon_idx := raw.rfind(":")
+	if colon_idx != -1:
+		var port_part := raw.substr(colon_idx + 1)
+		if not port_part.is_valid_int() or not is_valid_port(int(port_part)):
+			return false
+		raw = raw.left(colon_idx)
+
+	return is_valid_host_or_ip(raw)
+

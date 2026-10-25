@@ -1,0 +1,7 @@
+.git
+.godot
+build/
+android/build/
+*.tmp
+*.bak
+tests/

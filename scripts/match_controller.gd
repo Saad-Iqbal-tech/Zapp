@@ -106,7 +106,11 @@ func _apply_client_cli_overrides() -> void:
 		return
 	var all_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	for arg in all_args:
-		if arg.begins_with("--host="):
+		if arg.begins_with("--server-url="):
+			var url := arg.trim_prefix("--server-url=").strip_edges()
+			multiplayer_client.server_url = url
+			multiplayer_client.server_host = url
+		elif arg.begins_with("--host="):
 			multiplayer_client.server_host = arg.trim_prefix("--host=").strip_edges()
 		elif arg.begins_with("--port="):
 			multiplayer_client.server_port = int(arg.trim_prefix("--port="))
@@ -129,6 +133,11 @@ func _check_and_run_dedicated_server_cli() -> bool:
 	var run_as_server := false
 	var port := NetProtocol.DEFAULT_PORT
 	var bind_ip := "0.0.0.0"
+
+	# Check environment variable PORT (standard on Render and container platforms)
+	var env_port := OS.get_environment("PORT").strip_edges()
+	if not env_port.is_empty() and env_port.is_valid_int():
+		port = int(env_port)
 
 	for arg in all_args:
 		if arg == "--server" or arg == "--dedicated-server":

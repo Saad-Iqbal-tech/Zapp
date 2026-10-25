@@ -135,24 +135,28 @@ func _parse_and_validate_endpoint() -> Dictionary:
 	if p_name.is_empty():
 		p_name = client.player_name if client else "STRIKER_01"
 
-	if not NetProtocol.is_valid_host_or_ip(raw_host):
+	if not NetProtocol.is_valid_host_or_url(raw_host):
 		return {
 			"valid": false,
-			"error": "Invalid Server IP/Address '%s'. Enter a valid IPv4 address (e.g. 127.0.0.1 or LAN IP)." % raw_host
+			"error": "Invalid Server IP/URL '%s'. Enter a valid IPv4 address, hostname, or WebSocket URL (e.g. wss://service.onrender.com)." % raw_host
 		}
 
-	if not raw_port_str.is_valid_int():
-		return {
-			"valid": false,
-			"error": "Invalid Port '%s'. Enter a numeric UDP port between 1 and 65535." % raw_port_str
-		}
-
-	var port_num := int(raw_port_str)
-	if not NetProtocol.is_valid_port(port_num):
-		return {
-			"valid": false,
-			"error": "Invalid Port %d. Port must be between 1 and 65535." % port_num
-		}
+	var port_num := NetProtocol.DEFAULT_PORT
+	# If raw_host contains a full WebSocket URL or Render domain, port is optional
+	if not raw_host.begins_with("ws://") and not raw_host.begins_with("wss://") and not raw_host.contains(".onrender.com"):
+		if not raw_port_str.is_valid_int():
+			return {
+				"valid": false,
+				"error": "Invalid Port '%s'. Enter a numeric port between 1 and 65535." % raw_port_str
+			}
+		port_num = int(raw_port_str)
+		if not NetProtocol.is_valid_port(port_num):
+			return {
+				"valid": false,
+				"error": "Invalid Port %d. Port must be between 1 and 65535." % port_num
+			}
+	elif raw_port_str.is_valid_int() and NetProtocol.is_valid_port(int(raw_port_str)):
+		port_num = int(raw_port_str)
 
 	return {
 		"valid": true,
@@ -658,7 +662,7 @@ func _build_ui() -> void:
 	host_input = LineEdit.new()
 	host_input.name = "ServerHostInput"
 	host_input.text = NetProtocol.DEFAULT_HOST
-	host_input.placeholder_text = "127.0.0.1 or LAN IP"
+	host_input.placeholder_text = "127.0.0.1 or wss://...onrender.com"
 	host_input.custom_minimum_size = Vector2(150.0, 36.0)
 	srv_hbox.add_child(host_input)
 
